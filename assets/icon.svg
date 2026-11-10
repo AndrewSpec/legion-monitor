@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Source artwork for the application icon. Render with:
+     rsvg-convert -w 256 -h 256 assets/icon.svg -o assets/icon.png -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1d2637"/>
+      <stop offset="0.55" stop-color="#111722"/>
+      <stop offset="1" stop-color="#0b0e13"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7ea4ff"/>
+      <stop offset="1" stop-color="#4a6fdd"/>
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#182234"/>
+      <stop offset="1" stop-color="#0e1420"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#5b8cff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#5b8cff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+    <clipPath id="screen">
+      <rect x="96" y="112" width="320" height="216" rx="20"/>
+    </clipPath>
+    <clipPath id="leftPane">
+      <rect x="96" y="112" width="160" height="216"/>
+    </clipPath>
+    <clipPath id="round">
+      <rect x="0" y="0" width="512" height="512" rx="112"/>
+    </clipPath>
+  </defs>
+
+  <g clip-path="url(#round)">
+    <rect width="512" height="512" fill="url(#bg)"/>
+    <rect width="512" height="512" fill="url(#shine)"/>
+
+    <!-- Ambient glow behind the screen. -->
+    <ellipse cx="256" cy="232" rx="210" ry="150" fill="url(#glow)" filter="url(#soft)"/>
+
+    <!-- Monitor stand. -->
+    <rect x="240" y="336" width="32" height="30" rx="6" fill="url(#accent)"/>
+    <rect x="192" y="364" width="128" height="16" rx="8" fill="url(#accent)"/>
+
+    <!-- Monitor body. -->
+    <rect x="84" y="100" width="344" height="240" rx="32" fill="#0a0e15"/>
+    <rect x="92" y="108" width="328" height="224" rx="26" fill="url(#glass)"
+          stroke="#5b8cff" stroke-opacity="0.9" stroke-width="10"/>
+
+    <!-- Left pane: the lit half of a split view. -->
+    <rect x="96" y="112" width="160" height="216" fill="url(#accent)" clip-path="url(#screen)"/>
+    <rect x="96" y="112" width="160" height="216" fill="url(#shine)" clip-path="url(#screen)"/>
+
+    <!-- Right pane: line-art landscape. -->
+    <g clip-path="url(#screen)">
+      <circle cx="336" cy="186" r="20" fill="none" stroke="#8fa8e8" stroke-width="9"/>
+      <path d="M268 292 L318 226 L352 264 L378 232 L404 292 Z" fill="none"
+            stroke="#8fa8e8" stroke-width="9" stroke-linejoin="round"
+            stroke-linecap="round" opacity="0.85"/>
+    </g>
+
+    <!-- Divider between the two views. -->
+    <rect x="252" y="112" width="8" height="216" fill="#0d1015" clip-path="url(#screen)"/>
+
+    <!-- Glass highlight on the frame. -->
+    <path d="M100 132 Q100 112 120 112 H392 Q412 112 412 132"
+          fill="none" stroke="#aebfff" stroke-opacity="0.35" stroke-width="6"
+          stroke-linecap="round"/>
+
+    <!-- Rounded-square rim. -->
+    <rect x="2" y="2" width="508" height="508" rx="110" fill="none"
+          stroke="#ffffff" stroke-opacity="0.07" stroke-width="4"/>
+  </g>
+</svg>

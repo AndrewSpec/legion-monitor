@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Legion Monitor
+Comment=Control a Lenovo Legion R45w-30 monitor over DDC/CI
+Comment[pl]=Sterowanie PBP/PIP i obrazem monitora Lenovo R45w-30 (DDC/CI)
+Exec=legion-monitor
+Icon=legion-monitor
+Terminal=false
+StartupNotify=true
+StartupWMClass=legion-monitor
+Categories=Utility;
+Keywords=monitor;ddc;brightness;pip;pbp;
+Keywords[pl]=monitor;ddc;jasność;pip;pbp;
