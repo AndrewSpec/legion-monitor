@@ -131,6 +131,46 @@ Accepted `--page` values include `przeglad`, `obraz`, `kolor`, `zrodla`,
 `multiview` (`pip`, `pbp`), `profile`, `zaawansowane` and `about`
 (`o-aplikacji`).
 
+## Prebuilt packages
+
+There is no need to compile anything: the Release workflow
+(`.github/workflows/release.yml`) builds every `v*` tag on Ubuntu 22.04 and
+attaches the packages to the matching GitHub release
+(<https://github.com/AndrewSpec/legion-monitor/releases>).
+
+| Artifact | Install |
+|---|---|
+| `legion-monitor_<version>_amd64.deb` | `sudo apt install ./legion-monitor_<version>_amd64.deb` |
+| `legion-monitor-<version>-1.x86_64.rpm` | `sudo zypper install ./legion-monitor-<version>-1.x86_64.rpm` (or `dnf`) |
+| `legion-monitor-<version>-x86_64-linux-gnu.tar.gz` | unpack, then `./install.sh`, or run the binary in place |
+| `SHA256SUMS` | `sha256sum -c SHA256SUMS` |
+
+The `.deb` and `.rpm` declare `ddcutil` as a dependency; the tarball only holds
+the program, so install `ddcutil` yourself and grant access to `/dev/i2c-*` as
+described under [Requirements](#requirements). The packages are built against
+glibc 2.35 and run on Debian 12, Ubuntu 22.04 and newer, openSUSE Leap and
+Tumbleweed. The tarball unpacks to `legion-monitor-<version>/` with the binary,
+icons, desktop entry, the installer, README and license.
+
+To publish a release, bump `version` in `Cargo.toml`, commit, then push a tag:
+
+```bash
+git tag -a v0.2.1 -m "Legion Monitor 0.2.1"
+git push origin v0.2.1
+```
+
+The workflow verifies that the tag matches `Cargo.toml`, builds and tests the
+crate, packages it and uploads the files to the release, creating it when
+needed. To rebuild a tag that predates the workflow, run *Release* from the
+Actions tab and pass the tag.
+
+`packaging/package.sh` builds the same set locally (`--formats tarball,deb,rpm`,
+`--skip-build` to reuse an existing binary). `packaging/release.sh <tag>` is the
+fallback when Actions is unavailable: it builds the tag in a temporary worktree
+and uploads the packages with `gh` (`--dry-run` builds without uploading).
+Artifacts built outside the Ubuntu 22.04 runner need the local glibc, so a
+Tumbleweed build will not start on Debian 12 or Ubuntu 22.04.
+
 ## Icon
 
 The icon depicts a monitor split into two views, using the interface colors
@@ -243,8 +283,10 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 ```
 
-CI (`.github/workflows/ci.yml`) runs these checks and a release build on Ubuntu.
-The default tests do not require a monitor.
+CI (`.github/workflows/ci.yml`) runs these checks, a release build and a
+tarball/`.deb` packaging smoke test on Ubuntu 24.04. The Release workflow
+(`.github/workflows/release.yml`) builds the published packages on Ubuntu 22.04
+so the glibc baseline stays at 2.35. The default tests do not require a monitor.
 `worker::tests::live_reversible_picture_and_profile_roundtrip` is ignored by
 default and requires `LEGION_LIVE_TEST=1`, `LEGION_LIVE_SERIAL=<serial>` for
 the identified test monitor and permission to access `/dev/i2c-*`.
@@ -528,11 +570,14 @@ monitor at all. “Search again” reruns monitor detection.
 | `assets/icon.rgba` | Raw RGBA data embedded in the window (`include_bytes!`) |
 | `packaging/legion-monitor.desktop` | Desktop entry, icon, `StartupWMClass` and `app_id` |
 | `packaging/install.sh` | Binary, icon and desktop entry installation under `~/.local` |
+| `packaging/package.sh` | Tarball, `.deb`, `.rpm` and `SHA256SUMS` in `dist/` |
+| `packaging/release.sh` | Local fallback: builds a tag in a worktree and uploads the packages |
 | `tools/png_to_rgba.py` | PNG → RGBA conversion after icon changes |
 | `tools/mock/` | Offline `ddcutil`/`kscreen-doctor` mocks and deterministic screenshots |
 | `tools/render-live.sh` | Renders the real monitor state on a private Xvfb server |
 | `docs/screenshot.png` | Interface screenshot used in this README |
-| `.github/workflows/ci.yml` | Formatting, Clippy, tests and build in CI |
+| `.github/workflows/ci.yml` | Formatting, Clippy, tests, build and packaging smoke test |
+| `.github/workflows/release.yml` | Tag builds: tarball, `.deb` and `.rpm` attached to the release |
 | `LICENSE` | GPL-3.0-only license |
 
 ## License

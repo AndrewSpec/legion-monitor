@@ -11,3 +11,6 @@
 /.tmp-en-config/
 # Local GUI debug captures.
 /gui-*.png
+
+# Packages produced by packaging/package.sh.
+/dist/

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,8 +14,8 @@ env:
 
 jobs:
   check:
-    name: fmt, clippy, test
-    runs-on: ubuntu-latest
+    name: fmt, clippy, test, package
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
@@ -44,3 +45,13 @@ jobs:
 
       - name: Release build
         run: cargo build --locked --release
+
+      # Keep the packaging script covered on every change; the Release workflow
+      # builds the full tarball/.deb/.rpm set on Ubuntu 22.04.
+      - name: Package the tarball and the .deb
+        run: |
+          bash -n packaging/package.sh
+          sh -n packaging/install.sh
+          bash packaging/package.sh --skip-build --formats tarball,deb
+          tar tzf dist/*.tar.gz
+          dpkg-deb --info dist/*.deb
