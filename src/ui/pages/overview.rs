@@ -5,35 +5,12 @@ impl App {
         page_header(ui, self.t(Key::NavOverview), self.t(Key::OvDesc));
 
         let mode = self.multi_mode();
-        let input = self.value(0x60);
-        let pair = self.split_pair();
         let bright = self.value(0x10);
         let contrast = self.value(0x12);
 
         card(ui, |ui| {
             ui.horizontal(|ui| {
                 stat(ui, self.t(Key::OvMode), self.t(mode.key()));
-                ui.add_space(30.0);
-                stat(
-                    ui,
-                    self.t(Key::OvSource),
-                    &match (mode, pair) {
-                        // In a split 0x60 is a pair, not a single input code.
-                        (
-                            MultiMode::PictureInPicture | MultiMode::PictureByPicture,
-                            Some((left, right)),
-                        ) => {
-                            format!(
-                                "{} / {}",
-                                self.input_name_of(left),
-                                self.input_name_of(right)
-                            )
-                        }
-                        _ => input
-                            .map(|c| self.input_name_of(c))
-                            .unwrap_or_else(|| "—".into()),
-                    },
-                );
                 ui.add_space(30.0);
                 stat(
                     ui,
@@ -50,6 +27,12 @@ impl App {
                 );
             });
         });
+
+        ui.add_space(16.0);
+
+        // The source and split state are drawn inside the monitor instead of
+        // listed as text, so the graphic is the primary source of truth.
+        self.screen_card(ui);
 
         ui.add_space(16.0);
 
@@ -86,20 +69,6 @@ impl App {
                         self.save_to_slot('B');
                     }
                 });
-            });
-        });
-
-        ui.add_space(16.0);
-
-        ui.columns(2, |cols| {
-            let ui = &mut cols[0];
-            card_titled(ui, self.t(Key::OvMode), |ui| {
-                self.mode_selector(ui);
-            });
-
-            let ui = &mut cols[1];
-            card_titled(ui, self.t(Key::CardWindows), |ui| {
-                self.window_sources_block(ui);
             });
         });
     }

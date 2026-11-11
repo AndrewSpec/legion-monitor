@@ -66,6 +66,15 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (SaveAs, "Uložit jako {}"),
     (NoSplit, "Rozdělení obrazu není aktivní."),
     (ModeHint, "Při přepínání režimů může obrazovka na chvíli zhasnout — to je normální."),
+    // screen preview
+    (CardScreen, "Monitor a rozdělení obrazovky"),
+    (ScreenAspectEdid, "Poměr stran z EDID monitoru."),
+    (ScreenAspectModel, "Poměr stran rozpoznaný podle modelu monitoru."),
+    (ScreenAspectDesktop, "Poměr stran z aktuálního režimu plochy."),
+    (ScreenAspectDefault, "Poměr stran není znám — kresba 16:9 je orientační."),
+    (ScreenThisPc, "TENTO POČÍTAČ"),
+    (ScreenFull, "CELÁ OBRAZOVKA"),
+    (ScreenApproxSplit, "Náhled rozdělení je přibližný: monitor toto rozložení nepotvrdil."),
     // picture
     (ImgTitle, "Obraz"),
     (

@@ -5,6 +5,7 @@
 use crate::catalog::Section;
 use crate::ddc::{Capabilities, VcpValue};
 use crate::i18n;
+use crate::panel::{self, Panel, PanelSource};
 use crate::profiles::Store;
 use crate::settings::Settings;
 use crate::topology::{self, Displays};
@@ -14,6 +15,7 @@ use std::collections::BTreeMap;
 mod chrome;
 mod pages;
 mod rows;
+mod screen;
 mod theme;
 mod widgets;
 
@@ -54,6 +56,8 @@ pub struct App {
     win_sources: [u16; 2],
     /// Desktop topology: is there another screen to fall back to?
     displays: Displays,
+    /// Detected shape of the monitor's picture area, used by the overview.
+    panel: Panel,
     /// Monitor input this computer is connected to. Needed to close a split
     /// safely when no other screen is available.
     self_source: Option<u16>,
@@ -91,6 +95,7 @@ impl App {
             started: false,
             win_sources: [0, 0],
             displays: Displays::default(),
+            panel: Panel::default(),
             self_source: None,
             settings,
             lang,
@@ -259,6 +264,39 @@ impl App {
                     self.self_source = Some(source);
                 }
             }
+        }
+    }
+
+    /// Recomputes the drawn panel shape from the model, EDID and desktop mode.
+    ///
+    /// A split changes the exposed timing to one half, so the desktop mode is
+    /// only used in single mode. A shape measured from the desktop is kept
+    /// while the split is active instead of downgrading to the fallback.
+    fn refresh_panel(&mut self) {
+        let mode = self.multi_mode();
+        if mode != MultiMode::Off && self.panel.source == PanelSource::Desktop {
+            return;
+        }
+        let connector = self.connector().to_string();
+        let model = match &self.conn {
+            Conn::Ok(monitor) => monitor.model.clone(),
+            _ => String::new(),
+        };
+        let desktop = if mode == MultiMode::Off {
+            self.displays.output_size
+        } else {
+            None
+        };
+        self.panel = panel::detect(&connector, &model, desktop);
+    }
+
+    /// Sentence under the screen title that says where the shape came from.
+    fn panel_note(&self) -> &'static str {
+        match self.panel.source {
+            PanelSource::Edid => self.t(Key::ScreenAspectEdid),
+            PanelSource::Model => self.t(Key::ScreenAspectModel),
+            PanelSource::Desktop => self.t(Key::ScreenAspectDesktop),
+            PanelSource::Default => self.t(Key::ScreenAspectDefault),
         }
     }
 
@@ -452,9 +490,14 @@ impl App {
                         self.displays = Displays::default();
                     }
                     self.conn = c;
+                    self.panel = Panel::default();
+                    self.refresh_panel();
                 }
                 Ev::Caps(c) => self.caps = c,
-                Ev::Displays(d) => self.displays = d,
+                Ev::Displays(d) => {
+                    self.displays = d;
+                    self.refresh_panel();
+                }
                 Ev::Values(v) => {
                     self.partial_read = crate::ddc::CORE.iter().any(|code| !v.contains_key(code))
                         || self.vals.keys().any(|code| !v.contains_key(code));
@@ -471,6 +514,7 @@ impl App {
                         self.win_sources = [left, right];
                     }
                     self.refresh_self_source();
+                    self.refresh_panel();
                 }
                 Ev::Busy(b) => self.busy = b,
                 Ev::Notice(key, argument, err) => {

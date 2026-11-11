@@ -66,6 +66,15 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (SaveAs, "Salva come {}"),
     (NoSplit, "Nessuna divisione dell’immagine attiva."),
     (ModeHint, "Quando cambi modalità, lo schermo può diventare nero per un istante — è normale."),
+    // screen preview
+    (CardScreen, "Monitor e divisione dello schermo"),
+    (ScreenAspectEdid, "Proporzioni ricavate dall’EDID del monitor."),
+    (ScreenAspectModel, "Proporzioni riconosciute dal modello del monitor."),
+    (ScreenAspectDesktop, "Proporzioni ricavate dalla modalità attuale del desktop."),
+    (ScreenAspectDefault, "Proporzioni sconosciute — il disegno 16:9 è indicativo."),
+    (ScreenThisPc, "QUESTO COMPUTER"),
+    (ScreenFull, "SCHERMO INTERO"),
+    (ScreenApproxSplit, "L’anteprima della divisione è approssimativa: il monitor non ha confermato questa disposizione."),
     // picture
     (ImgTitle, "Immagine"),
     (

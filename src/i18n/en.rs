@@ -66,6 +66,15 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (SaveAs, "Save as {}"),
     (NoSplit, "No active picture split."),
     (ModeHint, "Switching modes may blank the screen for a moment — that is normal."),
+    // screen preview
+    (CardScreen, "Monitor and screen split"),
+    (ScreenAspectEdid, "Aspect ratio from the monitor's EDID."),
+    (ScreenAspectModel, "Aspect ratio recognized from the monitor model."),
+    (ScreenAspectDesktop, "Aspect ratio from the current desktop mode."),
+    (ScreenAspectDefault, "Aspect ratio unknown — the 16:9 drawing is illustrative."),
+    (ScreenThisPc, "THIS PC"),
+    (ScreenFull, "FULL SCREEN"),
+    (ScreenApproxSplit, "The split preview is approximate: the monitor has not confirmed this layout."),
     // picture
     (ImgTitle, "Picture"),
     (

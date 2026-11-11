@@ -4,3 +4,10 @@
 # Local hardware verification notes; only the README screenshot is published.
 /docs/*
 !/docs/screenshot.png
+!/docs/screenshots/
+!/docs/screenshots/*.png
+
+# Temporary English profile used for documentation screenshots.
+/.tmp-en-config/
+# Local GUI debug captures.
+/gui-*.png

@@ -6,6 +6,7 @@
 mod catalog;
 mod ddc;
 mod i18n;
+mod panel;
 mod profiles;
 mod settings;
 mod topology;

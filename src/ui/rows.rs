@@ -258,6 +258,7 @@ mod tests {
             started: true,
             win_sources: [0, 0],
             displays: crate::topology::Displays::default(),
+            panel: crate::panel::Panel::default(),
             self_source: None,
             settings: Settings::default(),
             lang: Lang::En,
@@ -354,6 +355,7 @@ mod tests {
             app.displays = crate::topology::Displays {
                 known: true,
                 second_screen,
+                output_size: None,
             };
             app.self_source = Some(0x31);
             let ctx = egui::Context::default();
@@ -389,6 +391,7 @@ mod tests {
                 app.displays = crate::topology::Displays {
                     known: true,
                     second_screen: false,
+                    output_size: None,
                 };
                 app.self_source = Some(0x31);
                 let ctx = egui::Context::default();
@@ -456,6 +459,7 @@ mod tests {
         app.displays = crate::topology::Displays {
             known: true,
             second_screen: false,
+            output_size: None,
         };
         app.self_source = None;
 

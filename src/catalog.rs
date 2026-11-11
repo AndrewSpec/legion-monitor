@@ -348,8 +348,13 @@ impl MultiMode {
 /// an input switch it can read back `0x5D` — so in that case the split type
 /// comes from the high byte of `F4` (`0x01` = PIP, `0x02` = PBP). Requiring
 /// `F2 == 1` hid the window pickers exactly when the monitor was in PBP.
+///
+/// A zero `F4` is the other reliable "no split" signal. The R45w-30 reports
+/// `F2 = 1` and `F4 = 0` in single mode (observed 2026-11-11), so treating a
+/// non-zero `F2` as proof of a split left the Overview on "unknown" while the
+/// monitor was plainly showing one input.
 pub fn multi_mode(f2: Option<u16>, f4: Option<u16>) -> MultiMode {
-    if f2 == Some(0) {
+    if f2 == Some(0) || f4 == Some(0) {
         return MultiMode::Off;
     }
     match f4.map(|v| v >> 8) {
@@ -413,7 +418,7 @@ mod tests {
     fn multi_mode_uses_f4_when_f2_is_stale() {
         for f2 in [None, Some(2), Some(93), Some(u16::MAX)] {
             assert_eq!(multi_mode(f2, None), MultiMode::Unknown);
-            assert_eq!(multi_mode(f2, Some(0)), MultiMode::Unknown);
+            assert_eq!(multi_mode(f2, Some(0)), MultiMode::Off);
         }
         assert_eq!(multi_mode(Some(0), Some(0x0201)), MultiMode::Off);
         assert_eq!(
@@ -430,7 +435,9 @@ mod tests {
             multi_mode(Some(0x5d), Some(0x0201)),
             MultiMode::PictureByPicture
         );
-        assert_eq!(multi_mode(Some(1), Some(0)), MultiMode::Unknown);
+        // Live R45w-30 single mode: F2 = 1, F4 = 0. The old code called this
+        // "unknown" and the Overview showed no picture mode at all.
+        assert_eq!(multi_mode(Some(1), Some(0)), MultiMode::Off);
     }
 
     #[test]

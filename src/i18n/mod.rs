@@ -143,6 +143,16 @@ pub enum Key {
     NoSplit,
     ModeHint,
 
+    // ── screen preview ──────────────────────────────────────────────────
+    CardScreen,
+    ScreenAspectEdid,
+    ScreenAspectModel,
+    ScreenAspectDesktop,
+    ScreenAspectDefault,
+    ScreenThisPc,
+    ScreenFull,
+    ScreenApproxSplit,
+
     // ── picture ───────────────────────────────────────────────────────────
     ImgTitle,
     ImgDesc,

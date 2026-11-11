@@ -22,6 +22,41 @@ brightness writes; see
 
 <sub>Screenshot taken without a connected monitor: the interface remains available in offline mode.</sub>
 
+## Overview monitor graphic
+
+The Overview page draws the panel in its actual shape instead of a generic
+rectangle. The aspect ratio comes from, in order: a known Legion model
+(`R45w-30` 32:9, `R34w-30` 21:9), the monitor's EDID physical image size, the
+active desktop mode while no split is active, and finally a labelled 16:9
+fallback. The screen shows the single input or the PBP/PiP panes, both window
+sources, the share of the two layouts verified on the R45w-30 (50/50 and 75/25),
+and marks the input used by this computer. A split is marked approximate unless
+the monitor confirmed its layout.
+
+## Screenshots
+
+Rendered in English against the offline mock monitor (`tools/mock/`), so they
+show split and wide-panel states that the disconnected test monitor cannot
+provide. Mock values are illustrative, not measurements.
+
+<p>
+  <img src="docs/screenshots/overview-pbp-en.png" width="49%" alt="Overview with a 32:9 monitor drawing, USB-C left and HDMI 1 right">
+  <img src="docs/screenshots/multiview-en.png" width="49%" alt="Multi-view page with mode, layout and window-source controls">
+</p>
+<p align="center"><sub>Overview: PBP 50/50 on a 32:9 panel · Multi-view: layout and per-window sources</sub></p>
+
+<p>
+  <img src="docs/screenshots/image-en.png" width="49%" alt="Picture page with brightness, contrast, gamma and sharpness">
+  <img src="docs/screenshots/color-en.png" width="49%" alt="Color page with temperature, preset and RGB gain controls">
+</p>
+<p align="center"><sub>Picture parameters · Color temperature, preset and RGB channels</sub></p>
+
+<p>
+  <img src="docs/screenshots/inputs-en.png" width="49%" alt="Inputs page with DisplayPort, HDMI 1, HDMI 2 and USB-C">
+  <img src="docs/screenshots/overview-single-en.png" width="49%" alt="Overview with a single 32:9 full-screen source">
+</p>
+<p align="center"><sub>Input selection · Overview in single mode</sub></p>
+
 ## Requirements
 
 - Linux with `ddcutil` (openSUSE: `sudo zypper install ddcutil`;
@@ -257,6 +292,11 @@ The tested R45w-30 reported brightness `100`, contrast `87` and USB-C input
 `--terse` output, short batches of VCP codes and removal of the worker's
 48-feature limit.
 
+On 2026-11-11, with the monitor connected over DisplayPort, single mode read
+`F2 = 1`, `F4 = 0`, `F5 = 0`, `A5 = 0` and `0x60 = 0x31`. Treating only
+`F2 = 0` as “no split” therefore reported the mode as unknown; the application
+now also treats `F4 = 0` as single mode. Active splits still report `F4 = 0x0201`.
+
 **Earlier failed experiment (2026-11-10):** a brightness change `100 → 95`
 returned exit code `0` from `ddcutil setvcp --noverify`, but delayed readback
 still returned `100`. Temporarily disabling HDR in **KDE** produced the same
@@ -348,6 +388,7 @@ connection and readback. “Search again” reruns monitor detection.
 | `src/i18n/<lang>.rs` | Translation tables (`ENTRIES`) |
 | `src/settings.rs` | Selected-language persistence in `settings.json` |
 | `src/topology.rs` | Desktop display scan (KScreen/XRandR) and monitor-link inference |
+| `src/panel.rs` | Panel aspect detection from model, EDID, desktop mode or fallback |
 | `src/worker.rs` | Worker thread, commands, events and read retries |
 | `src/profiles.rs` | Profile JSON persistence and configuration directory |
 | `src/ui/mod.rs` | Application state (`App`), update loop, shortcuts and worker communication |
@@ -356,12 +397,15 @@ connection and readback. “Search again” reruns monitor detection.
 | `src/ui/rows.rs` | Feature rows: sliders, switches, choices and placeholders |
 | `src/ui/chrome.rs` | Top bar, sidebar, offline banner and language picker |
 | `src/ui/pages/*.rs` | One module per page |
+| `src/ui/screen.rs` | Overview monitor drawing (bezel, stand, single/PBP/PiP panes) |
 | `assets/icon.svg` | Vector source for the application icon |
 | `assets/icon.png` | 256×256 desktop icon |
 | `assets/icon.rgba` | Raw RGBA data embedded in the window (`include_bytes!`) |
 | `packaging/legion-monitor.desktop` | Desktop entry, icon, `StartupWMClass` and `app_id` |
 | `packaging/install.sh` | Binary, icon and desktop entry installation under `~/.local` |
 | `tools/png_to_rgba.py` | PNG → RGBA conversion after icon changes |
+| `tools/mock/` | Offline `ddcutil`/`kscreen-doctor` mocks and deterministic screenshots |
+| `tools/render-live.sh` | Renders the real monitor state on a private Xvfb server |
 | `docs/screenshot.png` | Interface screenshot used in this README |
 | `.github/workflows/ci.yml` | Formatting, Clippy, tests and build in CI |
 | `LICENSE` | GPL-3.0-only license |

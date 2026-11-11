@@ -20,6 +20,9 @@ use std::process::Command;
 pub struct Displays {
     pub known: bool,
     pub second_screen: bool,
+    /// Active mode of the monitor's output, used only as a last-resort panel
+    /// shape measurement while the monitor is in single mode.
+    pub output_size: Option<(u32, u32)>,
 }
 
 impl Displays {
@@ -48,6 +51,7 @@ pub fn scan(monitor_connector: &str) -> Displays {
     Displays {
         known: false,
         second_screen: false,
+        output_size: None,
     }
 }
 
@@ -113,6 +117,22 @@ struct KScreenOutput {
     enabled: bool,
     #[serde(default)]
     clones: Vec<u32>,
+    #[serde(rename = "currentModeId", default)]
+    current_mode_id: String,
+    #[serde(default)]
+    modes: Vec<KScreenMode>,
+}
+
+#[derive(Deserialize)]
+struct KScreenMode {
+    id: String,
+    size: KScreenSize,
+}
+
+#[derive(Deserialize)]
+struct KScreenSize {
+    width: u32,
+    height: u32,
 }
 
 fn kscreen() -> Option<KScreenRoot> {
@@ -139,13 +159,18 @@ fn from_kscreen(root: KScreenRoot, monitor: &str) -> Option<Displays> {
             && !output.clones.contains(&ours.id)
             && !ours.clones.contains(&output.id)
     });
+    let output_size = ours
+        .modes
+        .iter()
+        .find(|mode| mode.id == ours.current_mode_id)
+        .map(|mode| (mode.size.width, mode.size.height))
+        .filter(|(width, height)| *width > 0 && *height > 0);
     Some(Displays {
         known: true,
         second_screen,
+        output_size,
     })
 }
-
-// ── XRandR ───────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 struct XOutput {
@@ -215,13 +240,20 @@ fn from_xrandr(outputs: Vec<XOutput>, monitor: &str) -> Option<Displays> {
             && output.enabled
             && output.geometry != ours.geometry
     });
+    let output_size = ours.geometry.as_deref().and_then(geometry_size);
     Some(Displays {
         known: true,
         second_screen,
+        output_size,
     })
 }
 
-// ── connector names ──────────────────────────────────────────────────────
+/// `2560x1440+0+0` → `(2560, 1440)`.
+fn geometry_size(token: &str) -> Option<(u32, u32)> {
+    let (size, _) = token.split_once('+')?;
+    let (width, height) = size.split_once('x')?;
+    Some((width.parse().ok()?, height.parse().ok()?))
+}
 
 /// `card1-DP-1` and `DP-1` are the same connector.
 fn short_name(name: &str) -> String {
@@ -258,13 +290,17 @@ mod tests {
     #[test]
     fn kscreen_counts_enabled_independent_outputs() {
         let json = r#"{"outputs":[
-            {"id":1,"name":"DP-1","connected":true,"enabled":true,"clones":[]},
+            {"id":1,"name":"DP-1","connected":true,"enabled":true,"clones":[],
+             "currentModeId":"7","modes":[
+                {"id":"6","size":{"width":2560,"height":1440}},
+                {"id":"7","size":{"width":5120,"height":1440}}]},
             {"id":2,"name":"eDP-1","connected":true,"enabled":true,"clones":[]}
         ]}"#;
         let root: KScreenRoot = serde_json::from_str(json).unwrap();
         let displays = from_kscreen(root, "dp-1").unwrap();
         assert!(displays.known);
         assert!(displays.second_screen);
+        assert_eq!(displays.output_size, Some((5120, 1440)));
     }
 
     #[test]
@@ -299,6 +335,7 @@ HDMI-A-1 disconnected (normal left inverted right x axis y axis)
         assert_eq!(outputs.len(), 2);
         let displays = from_xrandr(outputs, "card1-DP-1").unwrap();
         assert!(displays.second_screen);
+        assert_eq!(displays.output_size, Some((2560, 1440)));
     }
 
     #[test]

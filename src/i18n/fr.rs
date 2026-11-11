@@ -66,6 +66,15 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (SaveAs, "Enregistrer sous {}"),
     (NoSplit, "Aucun partage d’image actif."),
     (ModeHint, "Lors d’un changement de mode, l’écran peut devenir noir un instant — c’est normal."),
+    // screen preview
+    (CardScreen, "Moniteur et partage d’écran"),
+    (ScreenAspectEdid, "Format d’image issu de l’EDID du moniteur."),
+    (ScreenAspectModel, "Format d’image reconnu d’après le modèle du moniteur."),
+    (ScreenAspectDesktop, "Format d’image issu du mode actuel du bureau."),
+    (ScreenAspectDefault, "Format d’image inconnu — le dessin 16:9 est indicatif."),
+    (ScreenThisPc, "CET ORDINATEUR"),
+    (ScreenFull, "PLEIN ÉCRAN"),
+    (ScreenApproxSplit, "L’aperçu du partage est approximatif : le moniteur n’a pas confirmé cette disposition."),
     // picture
     (ImgTitle, "Image"),
     (

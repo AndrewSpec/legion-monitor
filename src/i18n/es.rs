@@ -66,6 +66,15 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (SaveAs, "Guardar como {}"),
     (NoSplit, "No hay ninguna división de imagen activa."),
     (ModeHint, "Al cambiar de modo, la pantalla puede quedarse en negro un momento — es normal."),
+    // screen preview
+    (CardScreen, "Monitor y división de pantalla"),
+    (ScreenAspectEdid, "Proporción tomada del EDID del monitor."),
+    (ScreenAspectModel, "Proporción reconocida por el modelo del monitor."),
+    (ScreenAspectDesktop, "Proporción tomada del modo actual del escritorio."),
+    (ScreenAspectDefault, "Proporción desconocida — el dibujo 16:9 es orientativo."),
+    (ScreenThisPc, "ESTE EQUIPO"),
+    (ScreenFull, "PANTALLA COMPLETA"),
+    (ScreenApproxSplit, "La vista de la división es aproximada: el monitor no ha confirmado esta distribución."),
     // picture
     (ImgTitle, "Imagen"),
     (

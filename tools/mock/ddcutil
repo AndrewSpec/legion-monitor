@@ -1,0 +1,162 @@
+#!/bin/sh
+# Offline stand-in for ddcutil used by the GUI checks in tools/mock/README.md.
+#
+# LEGION_MOCK_SCENARIO selects a canned monitor state:
+#   single-16:9, single-21:9, single-32:9, pbp-32:9, pbp-32:9-75, pip-21:9
+#
+# It only implements the subcommands this application calls: detect,
+# capabilities and --terse getvcp. Values are plausible but not measured.
+
+scenario="${LEGION_MOCK_SCENARIO:-single-32:9}"
+connector="${LEGION_MOCK_CONNECTOR:-card1-DP-2}"
+
+case "$scenario" in
+    single-16:9)
+        model="MOCK-16:9"
+        brightness=92
+        contrast=74
+        source="1F"
+        f0="FFFF"
+        f2="0000"
+        f4="0000"
+        f5="0000"
+        ;;
+    single-21:9)
+        model="Legion R34w-30"
+        brightness=88
+        contrast=70
+        source="0F"
+        f0="FFFF"
+        f2="0000"
+        f4="0000"
+        f5="0000"
+        ;;
+    single-32:9)
+        model="Lenovo Legion R45w-30"
+        brightness=100
+        contrast=87
+        source="31"
+        f0="FFFF"
+        f2="0000"
+        f4="0000"
+        f5="0000"
+        ;;
+    pbp-32:9)
+        # Left USB-C (0x31), right HDMI 1 (0x11), 50/50 split.
+        model="Lenovo Legion R45w-30"
+        brightness=96
+        contrast=83
+        source="1131"
+        f0="1131"
+        f2="0100"
+        f4="0201"
+        f5="0101"
+        ;;
+    pbp-32:9-75)
+        # The second layout verified on the R45w-30: 75/25.
+        model="Lenovo Legion R45w-30"
+        brightness=96
+        contrast=83
+        source="1131"
+        f0="1131"
+        f2="0100"
+        f4="0201"
+        f5="0401"
+        ;;
+    pip-21:9)
+        # Main DisplayPort (0x0F), inset HDMI 2 (0x12).
+        model="Legion R34w-30"
+        brightness=85
+        contrast=68
+        source="0F"
+        f0="120F"
+        f2="0001"
+        f4="0101"
+        f5="0000"
+        ;;
+    *)
+        echo "unknown LEGION_MOCK_SCENARIO: $scenario" >&2
+        exit 2
+        ;;
+esac
+
+# Shared picture/color values, representative of the tested R45w-30.
+sharpness=4
+gamma=35840
+color_temp=2
+preset=05
+red=100
+green=100
+blue=98
+
+case "$1" in
+    detect)
+        cat <<EOF
+Display 1
+   I2C bus:  /dev/i2c-7
+   DRM_connector:           $connector
+   EDID synopsis:
+      Mfg id:               LEN - Lenovo
+      Model:                $model
+      Serial number:        MOCK0001
+      VCP version:         2.2
+EOF
+        ;;
+    --display)
+        if [ "$3" = "capabilities" ]; then
+            cat <<'EOF'
+Feature: 0x10 (Brightness)
+Feature: 0x12 (Contrast)
+Feature: 0x0c (Color Temperature)
+Feature: 0x14 (Select Color Preset)
+   Values:
+      01: sRGB
+      05: 6500 K
+      06: 7500 K
+      08: 9300 K
+      0b: User 1
+Feature: 0x16 (Red Gain)
+Feature: 0x18 (Green Gain)
+Feature: 0x1a (Blue Gain)
+Feature: 0x60 (Input Source)
+   Values:
+      0f: DisplayPort
+      11: HDMI 1
+      12: HDMI 2
+      31: USB-C
+Feature: 0xf0 (Audio Source)
+Feature: 0xf2 (PIP/PBP)
+Feature: 0xf4 (PIP Size)
+Feature: 0xf5 (PBP Control)
+Feature: 0x72 (Gamma)
+Feature: 0x87 (Sharpness)
+Feature: 0xa5 (Window Select)
+EOF
+        else
+            # Skip "--display N --terse getvcp" and answer only requested codes.
+            shift 4
+            for code in "$@"; do
+                case "$code" in
+                    10) echo "VCP 10 C $brightness 100" ;;
+                    12) echo "VCP 12 C $contrast 100" ;;
+                    0C|0c) echo "VCP 0c C $color_temp 4" ;;
+                    14) echo "VCP 14 SNC $preset" ;;
+                    16) echo "VCP 16 C $red 100" ;;
+                    18) echo "VCP 18 C $green 100" ;;
+                    1A|1a) echo "VCP 1a C $blue 100" ;;
+                    72) echo "VCP 72 C $gamma 40960" ;;
+                    87) echo "VCP 87 C $sharpness 4" ;;
+                    60) echo "VCP 60 SNC $source" ;;
+                    F0|f0) echo "VCP f0 SNC $f0" ;;
+                    F2|f2) echo "VCP f2 SNC $f2" ;;
+                    F4|f4) echo "VCP f4 SNC $f4" ;;
+                    F5|f5) echo "VCP f5 SNC $f5" ;;
+                esac
+            done
+        fi
+        ;;
+    *)
+        echo "mock ddcutil supports only detect, capabilities and getvcp" >&2
+        exit 2
+        ;;
+esac

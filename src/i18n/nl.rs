@@ -66,6 +66,15 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (SaveAs, "Opslaan als {}"),
     (NoSplit, "Er is geen beeldsplitsing actief."),
     (ModeHint, "Bij het wisselen van modus kan het scherm even zwart worden — dat is normaal."),
+    // screen preview
+    (CardScreen, "Monitor en schermverdeling"),
+    (ScreenAspectEdid, "Beeldverhouding uit de EDID van de monitor."),
+    (ScreenAspectModel, "Beeldverhouding herkend aan het monitormodel."),
+    (ScreenAspectDesktop, "Beeldverhouding uit de huidige bureaubladmodus."),
+    (ScreenAspectDefault, "Beeldverhouding onbekend — de 16:9-tekening is indicatief."),
+    (ScreenThisPc, "DEZE COMPUTER"),
+    (ScreenFull, "VOLLEDIG SCHERM"),
+    (ScreenApproxSplit, "De voorbeeldweergave van de verdeling is bij benadering: de monitor heeft deze indeling niet bevestigd."),
     // picture
     (ImgTitle, "Beeld"),
     (

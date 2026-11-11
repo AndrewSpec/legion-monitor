@@ -69,6 +69,15 @@ pub const ENTRIES: &[(Key, &str)] = &[
         ModeHint,
         "Zmiana trybu może na chwilę wygasić obraz — to normalne.",
     ),
+    // screen preview
+    (CardScreen, "Monitor i podział ekranu"),
+    (ScreenAspectEdid, "Proporcje z EDID monitora."),
+    (ScreenAspectModel, "Proporcje rozpoznane po modelu monitora."),
+    (ScreenAspectDesktop, "Proporcje z bieżącego trybu pulpitu."),
+    (ScreenAspectDefault, "Proporcje nieznane — rysunek 16:9 jest poglądowy."),
+    (ScreenThisPc, "TEN KOMPUTER"),
+    (ScreenFull, "PEŁNY EKRAN"),
+    (ScreenApproxSplit, "Podgląd podziału jest przybliżony: monitor nie potwierdził tego układu."),
     // picture
     (ImgTitle, "Obraz"),
     (
