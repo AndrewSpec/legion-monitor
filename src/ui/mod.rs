@@ -250,12 +250,12 @@ impl App {
 
     /// Reads the mode from the registers when the user has not just chosen one.
     ///
-    /// F4 is the only register that separates the three states on the
-    /// R45w-30: 0x0000 single, 0x0100 True Split, 0x0101 PIP. F2 reads 0 in
-    /// both split modes, and 0x60 holds only the left source in True Split,
-    /// so neither can be used as a mode flag.
+    /// F2 is the mode register on the R45w-30: zero is one picture,
+    /// 0x0100/0x0101 is PIP (bit 0 is the swap flag) and 0x0103 is True
+    /// Split. F4 mirrors the selected window and can stay non-zero after the
+    /// split closes, so it must not be used here.
     fn derive_multi_mode(&self) -> MultiMode {
-        catalog::multi_mode(self.value(0xf4))
+        catalog::multi_mode(self.value(0xf2))
     }
 
     fn connector(&self) -> &str {
@@ -477,7 +477,7 @@ impl App {
     pub(crate) fn save_rescue_baseline(&mut self, manual: bool) {
         let result = if !self.connected() {
             Err(Key::RescueNoMonitor)
-        } else if catalog::multi_mode(self.value(0xf4)) != MultiMode::Off {
+        } else if catalog::multi_mode(self.value(0xf2)) != MultiMode::Off {
             // F4 can read 0 on monitors that do not expose PIP size, so ask
             // the same decoder the rest of the app uses instead of requiring
             // the literal 0x0200.
@@ -600,10 +600,13 @@ impl App {
         // partial PIP attempt F4 can still report a split while the UI thinks
         // the page is single, and skipping the close leaves PIP on a
         // half-written window. F4 low byte: 0 = True Split, 1 = PIP.
-        let leave_pbp = match self.value(0xf4) {
-            Some(0x0100) => true,
-            Some(0x0101) | Some(0) => false,
-            _ => matches!(
+        // F2 is the mode register: bit 1 marks True Split, zero is single
+        // and the remaining values are PIP. When the register is missing,
+        // fall back to what the page last showed.
+        let leave_pbp = match self.value(0xf2) {
+            Some(0) => false,
+            Some(value) => value & 0x0002 != 0,
+            None => matches!(
                 self.multi_mode(),
                 MultiMode::PictureByPicture | MultiMode::Unknown
             ),
@@ -697,6 +700,9 @@ impl App {
             });
         });
         if let Some(code) = chosen {
+            if self.pip_source() == Some(code) {
+                return;
+            }
             // Resolve the previous mode before the hint is set: a source pick
             // while PIP is off must also place the window, not just write 0xA5.
             let was_pip = self.multi_mode() == MultiMode::PictureInPicture;
@@ -712,6 +718,7 @@ impl App {
                 self.send(Cmd::ApplyWindow {
                     selector: 0x0100,
                     source: code,
+                    swap: true,
                 });
             } else {
                 self.enter_pip_with(corner, Some(code));
@@ -760,11 +767,15 @@ impl App {
                 });
             }
             MultiMode::PictureInPicture => {
+                if self.pip_source() == Some(source) {
+                    return;
+                }
                 self.win_sources[1] = source;
                 self.mode_hint = Some(MultiMode::PictureInPicture);
                 self.send(Cmd::ApplyWindow {
                     selector: 0x0100,
                     source,
+                    swap: true,
                 });
             }
             _ => {}

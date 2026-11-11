@@ -25,6 +25,7 @@ pub enum Cmd {
     ApplyWindow {
         selector: u16,
         source: u16,
+        swap: bool,
     },
     /// Sets both halves of a picture-by-picture split in one step.
     ///
@@ -228,7 +229,11 @@ impl Worker {
                             let _ = etx.send(Ev::Values(vals));
                             let _ = etx.send(Ev::Busy(false));
                         }
-                        Cmd::ApplyWindow { selector, source } => {
+                        Cmd::ApplyWindow {
+                            selector,
+                            source,
+                            swap,
+                        } => {
                             let Some(m) = mon.clone() else {
                                 let _ =
                                     etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
@@ -244,6 +249,16 @@ impl Worker {
                                 thread::sleep(Duration::from_millis(300));
                                 write_log(&etx, 0x60, source);
                                 failure = ddc::set(m.display, 0x60, source).err();
+                            }
+                            if failure.is_none() && swap {
+                                // Selecting the background and writing the new
+                                // source is what actually changes the full
+                                // picture.  One swap then moves the old PIP
+                                // picture to the background and the new source
+                                // into the quarter.
+                                thread::sleep(Duration::from_millis(200));
+                                write_log(&etx, 0xf2, 1);
+                                failure = ddc::set(m.display, 0xf2, 1).err();
                             }
                             settle();
                             let vals = read_codes(m.display, &caps);
@@ -354,16 +369,14 @@ impl Worker {
                                         }
                                         settle();
                                         thread::sleep(Duration::from_millis(300));
-                                        // F4 low byte carries the window state:
-                                        // 0 = True Split, 1 = PIP, 0 = single when
-                                        // the whole value is zero. Retry because a
+                                        // F2 is the mode register. Retry because a
                                         // read during the mode change can fail;
                                         // refuse to open PIP while a split remains.
                                         if failure.is_none() {
                                             let mut probe = None;
                                             for attempt in 0..3 {
-                                                if let Some(value) = ddc::read(m.display, &[0xf4])
-                                                    .get(&0xf4)
+                                                if let Some(value) = ddc::read(m.display, &[0xf2])
+                                                    .get(&0xf2)
                                                     .map(|v| v.value)
                                                 {
                                                     probe = Some(value);
@@ -453,48 +466,67 @@ impl Worker {
                                     None => stopped = Some(Key::WriteUnconfirmed),
                                 }
                             }
-                            // Only select the PIP window after the rectangle is
-                            // already valid. A5 answers EIO even when it takes
-                            // effect, so the F4 probe below decides.
+                            // The monitor does not open PIP from A5 alone. On
+                            // the test unit F2 stayed zero until F2=1 was
+                            // written, so open the window explicitly and verify
+                            // it before touching the source.
                             if failure.is_none() && stopped.is_none() {
-                                write_log(&etx, 0xa5, 0x0100);
-                                if let Err(e) = ddc::set(m.display, 0xa5, 0x0100) {
-                                    let _ = etx.send(Ev::Log(LogLine::Text(e)));
-                                }
-                                thread::sleep(Duration::from_millis(400));
-                            }
-                            if failure.is_none() && stopped.is_none() {
-                                let mut active = None;
-                                for attempt in 0..3 {
-                                    if let Some(value) = ddc::read(m.display, &[0xf4])
-                                        .get(&0xf4)
-                                        .map(|v| v.value)
-                                    {
-                                        active = Some(value);
-                                        if value == 0x0101 {
+                                let mut mode = ddc::read(m.display, &[0xf2])
+                                    .get(&0xf2)
+                                    .map(|v| v.value);
+                                if mode
+                                    .map(|value| catalog::multi_mode(Some(value)))
+                                    != Some(MultiMode::PictureInPicture)
+                                {
+                                    write_log(&etx, 0xf2, 1);
+                                    if let Err(e) = ddc::set(m.display, 0xf2, 1) {
+                                        let _ = etx.send(Ev::Log(LogLine::Text(e)));
+                                    }
+                                    settle();
+                                    for attempt in 0..3 {
+                                        mode = ddc::read(m.display, &[0xf2])
+                                            .get(&0xf2)
+                                            .map(|v| v.value);
+                                        if mode.map(|value| {
+                                            catalog::multi_mode(Some(value))
+                                        }) == Some(MultiMode::PictureInPicture)
+                                        {
                                             break;
                                         }
-                                    }
-                                    if attempt < 2 {
-                                        thread::sleep(Duration::from_millis(300));
+                                        if attempt < 2 {
+                                            thread::sleep(Duration::from_millis(300));
+                                        }
                                     }
                                 }
-                                match active {
-                                    Some(0x0101) => {}
+                                match mode.map(|value| catalog::multi_mode(Some(value))) {
+                                    Some(MultiMode::PictureInPicture) => {}
                                     Some(_) => stopped = Some(Key::WriteMismatch),
                                     None => stopped = Some(Key::WriteUnconfirmed),
                                 }
                             }
+                            // A5=0x0100 selects the main window. The monitor
+                            // shows the other input in the PIP quarter, so two
+                            // writes move the selected secondary into the
+                            // quarter and put the app input back on the main
+                            // image. This matches the OSD's source order.
                             if failure.is_none() && stopped.is_none() {
                                 if let Some(source) = source {
-                                    // The selector is already confirmed above;
-                                    // this write only changes the PIP window.
-                                    write_log(&etx, 0x60, source);
-                                    if let Err(e) = ddc::set(m.display, 0x60, source) {
-                                        let _ = etx.send(Ev::Log(LogLine::Text(e.clone())));
-                                        failure = Some(e);
+                                    if main != Some(source) {
+                                        write_log(&etx, 0xa5, 0x0100);
+                                        if let Err(e) = ddc::set(m.display, 0xa5, 0x0100) {
+                                            let _ = etx.send(Ev::Log(LogLine::Text(e)));
+                                        }
+                                        thread::sleep(Duration::from_millis(400));
+                                        for value in [source, main.unwrap_or(source)] {
+                                            write_log(&etx, 0x60, value);
+                                            if let Err(e) = ddc::set(m.display, 0x60, value) {
+                                                let _ = etx.send(Ev::Log(LogLine::Text(e.clone())));
+                                                failure = Some(e);
+                                                break;
+                                            }
+                                            settle();
+                                        }
                                     }
-                                    settle();
                                 }
                             }
                             settle();
@@ -608,16 +640,13 @@ fn split_plan(left: u16, right: u16, layout: Option<u16>, enable_pbp: bool) -> V
 /// The pair and `0xA5 = 0` close a True Split, but an active PIP window also
 /// needs `0xF2 = 0`: on the test unit the pair/selector/source writes alone
 /// left `0xF2 = 0x0101` and the PIP window on screen. `0xF2 = 0` cleared it.
-fn single_plan(source: Option<u16>, pbp: bool) -> Vec<(u8, u16)> {
-    match (source, pbp) {
-        (Some(source), true) => vec![
-            (0x60, catalog::window_pair(source, source)),
-            (0xa5, 0),
-            (0x60, source),
-            (0xf2, 0),
-        ],
-        (Some(source), false) => vec![(0xa5, 0), (0x60, source), (0xf2, 0)],
-        (None, _) => vec![(0xa5, 0), (0xf2, 0)],
+fn single_plan(source: Option<u16>, _pbp: bool) -> Vec<(u8, u16)> {
+    // Select the background window first, point it at our input, then close
+    // the split.  On the test unit the old order (close, then write 0x60)
+    // changed the mode but the full-screen picture stayed on the other input.
+    match source {
+        Some(source) => vec![(0xa5, 0x0100), (0x60, source), (0xf2, 0), (0xa5, 0)],
+        None => vec![(0xf2, 0), (0xa5, 0)],
     }
 }
 
@@ -656,6 +685,10 @@ fn pip_feedback(
 ) -> (Key, String, bool) {
     if let Some(error) = failure {
         return (Key::WriteFailed, error, true);
+    }
+    let have = catalog::multi_mode(observed.get(&0xf2).map(|v| v.value));
+    if have != MultiMode::PictureInPicture {
+        return (Key::WriteMismatch, "1".to_string(), true);
     }
     let read = |code: u8| observed.get(&code).map(|value| value.value);
     match (read(0x95), read(0x96), read(0x97), read(0x98)) {
@@ -712,14 +745,8 @@ fn single_feedback(
     if let Some(error) = failure {
         return (Key::WriteFailed, error, true);
     }
-    let have = catalog::multi_mode(observed.get(&0xf4).map(|v| v.value));
-    // A closed split reports a single-byte 0x60. Accept that even when F2/F4
-    // still carry a stale split value; a live PBP reports the full pair.
-    let single = observed
-        .get(&0x60)
-        .map(|v| v.value)
-        .filter(|value| *value <= 0xff);
-    if have != MultiMode::Off && !(source.is_some() && single.is_some()) {
+    let have = catalog::multi_mode(observed.get(&0xf2).map(|v| v.value));
+    if have != MultiMode::Off {
         return (Key::WriteMismatch, "1".to_string(), true);
     }
     if let Some(source) = source {
@@ -739,7 +766,7 @@ fn mode_feedback(
     if let Some(error) = failure {
         return (Key::WriteFailed, error, true);
     }
-    let have = catalog::multi_mode(observed.get(&0xf4).map(|v| v.value));
+    let have = catalog::multi_mode(observed.get(&0xf2).map(|v| v.value));
     if have == want {
         (Key::WriteConfirmed, "1".to_string(), false)
     } else {
@@ -990,6 +1017,7 @@ mod tests {
             max: 5120,
         };
         let mut observed = BTreeMap::new();
+        observed.insert(0xf2, value(0x0100));
         for (code, v) in [(0x95, 2560), (0x96, 0), (0x97, 5120), (0x98, 720)] {
             observed.insert(code, value(v));
         }
@@ -1004,10 +1032,10 @@ mod tests {
         assert_eq!(
             plan,
             vec![
-                (0x60, 0x3131),
-                (0xa5, 0),
+                (0xa5, 0x0100),
                 (0x60, 0x31),
                 (0xf2, 0),
+                (0xa5, 0),
                 (0x10, 80),
                 (0x12, 60),
             ]
@@ -1015,16 +1043,16 @@ mod tests {
     }
 
     #[test]
-    fn single_plan_puts_our_source_on_both_halves_before_closing() {
+    fn single_plan_selects_the_background_before_closing() {
         assert_eq!(
             single_plan(Some(0x31), true),
-            vec![(0x60, 0x3131), (0xa5, 0), (0x60, 0x31), (0xf2, 0)]
+            vec![(0xa5, 0x0100), (0x60, 0x31), (0xf2, 0), (0xa5, 0)]
         );
         assert_eq!(
             single_plan(Some(0x31), false),
-            vec![(0xa5, 0), (0x60, 0x31), (0xf2, 0)]
+            vec![(0xa5, 0x0100), (0x60, 0x31), (0xf2, 0), (0xa5, 0)]
         );
-        assert_eq!(single_plan(None, true), vec![(0xa5, 0), (0xf2, 0)]);
+        assert_eq!(single_plan(None, true), vec![(0xf2, 0), (0xa5, 0)]);
     }
 
     #[test]
@@ -1046,11 +1074,10 @@ mod tests {
         vals.insert(0x60, value(0x3111));
         assert!(single_feedback(Some(0x31), &vals, None).2);
 
-        // F2/F4 can be stale after closing; a single-byte 0x60 proves the mode.
+        // F2 is the mode register; a stale non-zero value is a mismatch.
         vals.insert(0xf2, value(0x5d));
-        vals.insert(0xf4, value(0x0101));
         vals.insert(0x60, value(0x31));
-        assert!(!single_feedback(Some(0x31), &vals, None).2);
+        assert!(single_feedback(Some(0x31), &vals, None).2);
 
         // Single mode but on the other input.
         vals.insert(0xf2, value(0));

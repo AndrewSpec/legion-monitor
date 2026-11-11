@@ -400,7 +400,7 @@ mod tests {
             },
         );
         app.vals.insert(
-            0xf4,
+            0xf2,
             VcpValue {
                 value: 0x0000,
                 max: 0xffff,

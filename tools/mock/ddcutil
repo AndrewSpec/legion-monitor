@@ -49,7 +49,7 @@ case "$scenario" in
         contrast=83
         source="1131"
         f0="1131"
-        f2="0100"
+        f2="0103"
         f4="0100"
         f5="0101"
         ;;
@@ -60,7 +60,7 @@ case "$scenario" in
         contrast=83
         source="1131"
         f0="1131"
-        f2="0100"
+        f2="0103"
         f4="0100"
         f5="0401"
         ;;
@@ -83,7 +83,7 @@ case "$scenario" in
         contrast=68
         source="0F"
         f0="120F"
-        f2="0001"
+        f2="0100"
         f4="0101"
         f5="0000"
         ;;
