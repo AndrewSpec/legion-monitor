@@ -60,6 +60,7 @@ pub(crate) fn section_title(t: &Strings, section: Section) -> &'static str {
         Section::Profiles => Key::NavProfiles,
         Section::Rescue => Key::NavRescue,
         Section::Advanced => Key::NavAdvanced,
+        Section::About => Key::NavAbout,
     })
 }
 
@@ -192,6 +193,18 @@ pub(crate) fn draw_icon(p: &egui::Painter, center: Pos2, r: f32, section: Sectio
                 p.circle_filled(Pos2::new(center.x + kx, y), r * 0.22, color);
             }
         }
+        Section::About => {
+            // Circled "i": information, not a control.
+            p.circle_stroke(center, r * 0.82, stroke);
+            p.circle_filled(center + Vec2::new(0.0, -r * 0.36), r * 0.13, color);
+            p.line_segment(
+                [
+                    center + Vec2::new(0.0, -r * 0.08),
+                    center + Vec2::new(0.0, r * 0.4),
+                ],
+                stroke,
+            );
+        }
     }
 }
 
@@ -205,6 +218,7 @@ pub(crate) fn configure_style(ctx: &egui::Context) {
     style.visuals.code_bg_color = BG;
     style.visuals.selection.bg_fill = ACCENT.gamma_multiply(0.45);
     style.visuals.selection.stroke = Stroke::new(1.0_f32, TEXT);
+    style.visuals.hyperlink_color = ACCENT;
     style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0_f32, TEXT);
     style.visuals.widgets.inactive.bg_fill = CARD;
     style.visuals.widgets.inactive.weak_bg_fill = CARD;

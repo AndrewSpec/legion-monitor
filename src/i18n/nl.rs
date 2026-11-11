@@ -338,4 +338,16 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (DumpNoMonitor, "Monitor niet aangesloten."),
     (DumpConnect, "Sluit de monitor aan via USB-C / DP / HDMI en probeer het opnieuw."),
     (DumpDetails, "Technische details: {}"),
+
+    // ── about ─────────────────────────────────────────────────────────
+    (NavAbout, "Over"),
+    (AbtDesc, "Applicatieversie, auteur en projectlinks."),
+    (AbtTagline, "Monitorbesturing via DDC/CI voor de Lenovo Legion R45w-30."),
+    (AbtCardApp, "Applicatie"),
+    (AbtAuthor, "Auteur"),
+    (AbtLicense, "Licentie"),
+    (AbtSource, "Broncode"),
+    (AbtCardUpdates, "Updates"),
+    (AbtUpdatesBody, "Releaseopmerkingen en nieuwere versies worden op GitHub gepubliceerd."),
+    (AbtReleases, "GitHub-releases openen"),
 ];

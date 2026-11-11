@@ -30,6 +30,16 @@ pub(crate) fn page_header(ui: &mut Ui, title: &str, subtitle: &str) {
     ui.add_space(16.0);
 }
 
+/// "Label — value" row: label on the left, value aligned to the right.
+pub(crate) fn info_row(ui: &mut Ui, label: &str, value: &str) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).size(12.0).color(DIM));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.label(RichText::new(value).size(12.0).color(TEXT));
+        });
+    });
+}
+
 pub(crate) fn section_label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(10.5).strong().color(FAINT));
     ui.add_space(6.0);

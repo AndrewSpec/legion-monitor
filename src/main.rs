@@ -3,6 +3,7 @@
 //! `legion-monitor`         opens the application window
 //! `legion-monitor --dump`  prints the monitor state in the terminal
 
+mod about;
 mod catalog;
 mod ddc;
 mod i18n;
@@ -54,14 +55,14 @@ fn main() -> eframe::Result<()> {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1180.0, 800.0])
             .with_min_inner_size([980.0, 660.0])
-            .with_title("Legion Monitor")
+            .with_title(about::NAME)
             .with_app_id("legion-monitor")
             .with_icon(app_icon()),
         ..Default::default()
     };
 
     eframe::run_native(
-        "Legion Monitor",
+        about::NAME,
         options,
         Box::new(move |cc| {
             Ok(Box::new(match start {

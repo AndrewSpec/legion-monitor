@@ -124,7 +124,8 @@ Make sure `~/.local/bin` is in `PATH`: the desktop entry launches
 taskbar picks up its icon.
 
 Accepted `--page` values include `przeglad`, `obraz`, `kolor`, `zrodla`,
-`multiview` (`pip`, `pbp`), `profile` and `zaawansowane`.
+`multiview` (`pip`, `pbp`), `profile`, `zaawansowane` and `about`
+(`o-aplikacji`).
 
 ## Icon
 
@@ -178,6 +179,7 @@ returned, so an unsupported feature leaves no trace in the interface.
 | Profiles | A/B configurations and any number of named profiles |
 | Rescue | A snapshot of a working single picture, saved automatically at startup and restorable without seeing the screen; while armed, the app keeps probing for the monitor, notices a reconnect and restores the saved source, split state and picture settings |
 | Advanced | Volume, mute, power mode, manufacturer-specific features and reset |
+| About | Application version, author, license and links to the source repository and GitHub releases; built from Cargo metadata and available without a monitor |
 
 Keyboard shortcuts: **F1** applies configuration A, **F2** applies configuration B,
 and **F5** refreshes the state.
@@ -485,15 +487,17 @@ exercised.
 
 When no monitor is connected, the application shows “Offline” and keeps all
 sections visible with empty values as an interface preview, not a claim of
-monitor support. Profiles and Rescue remain accessible; applying settings
+monitor support. Profiles, Rescue and About remain accessible; applying settings
 requires a connection and readback, while the Rescue snapshot can be armed and
-saved offline. “Search again” reruns monitor detection.
+saved offline. About only reads build metadata and project links, so it needs no
+monitor at all. “Search again” reruns monitor detection.
 
 ## Code structure
 
 | File | Responsibility |
 |---|---|
 | `src/main.rs` | Entry point, `--dump`, `--page` |
+| `src/about.rs` | Version, author, license and repository metadata from Cargo, plus the GitHub releases URL |
 | `src/ddc.rs` | `ddcutil` calls and `detect`/`capabilities`/`getvcp` parsing |
 | `src/catalog.rs` | Feature catalog (VCP codes → `Key`), sections, True Split/PIP geometry and modes |
 | `src/i18n/mod.rs` | `Lang`, `Key`, `Strings` and locale-based language selection |

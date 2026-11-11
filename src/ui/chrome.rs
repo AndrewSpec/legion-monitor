@@ -17,7 +17,7 @@ impl App {
             ui.add_space(12.0);
             ui.vertical(|ui| {
                 ui.label(
-                    RichText::new("Legion Monitor")
+                    RichText::new(crate::about::NAME)
                         .size(15.5)
                         .strong()
                         .color(TEXT),
@@ -199,6 +199,10 @@ impl App {
             ui.add_space(4.0);
             ui.separator();
             ui.add_space(4.0);
+            if nav_item(ui, Section::About, self.section == Section::About, &self.tr) {
+                self.section = Section::About;
+            }
+            ui.add_space(2.0);
             if nav_item(
                 ui,
                 Section::Advanced,

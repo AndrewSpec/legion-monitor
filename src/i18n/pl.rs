@@ -350,4 +350,16 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (DumpNoMonitor, "Monitor niepodłączony."),
     (DumpConnect, "Podłącz monitor przez USB-C / DP / HDMI i spróbuj ponownie."),
     (DumpDetails, "Szczegóły techniczne: {}"),
+
+    // ── about ─────────────────────────────────────────────────────────
+    (NavAbout, "O aplikacji"),
+    (AbtDesc, "Wersja aplikacji, autor i odnośniki do projektu."),
+    (AbtTagline, "Sterowanie monitorem Lenovo Legion R45w-30 przez DDC/CI."),
+    (AbtCardApp, "Aplikacja"),
+    (AbtAuthor, "Autor"),
+    (AbtLicense, "Licencja"),
+    (AbtSource, "Kod źródłowy"),
+    (AbtCardUpdates, "Aktualizacje"),
+    (AbtUpdatesBody, "Informacje o wydaniach i nowsze wersje są publikowane na GitHubie."),
+    (AbtReleases, "Otwórz wydania na GitHubie"),
 ];

@@ -338,4 +338,16 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (DumpNoMonitor, "Monitor není připojen."),
     (DumpConnect, "Připojte monitor přes USB-C / DP / HDMI a zkuste to znovu."),
     (DumpDetails, "Technické podrobnosti: {}"),
+
+    // ── about ─────────────────────────────────────────────────────────
+    (NavAbout, "O aplikaci"),
+    (AbtDesc, "Verze aplikace, autor a odkazy na projekt."),
+    (AbtTagline, "Ovládání monitoru Lenovo Legion R45w-30 přes DDC/CI."),
+    (AbtCardApp, "Aplikace"),
+    (AbtAuthor, "Autor"),
+    (AbtLicense, "Licence"),
+    (AbtSource, "Zdrojový kód"),
+    (AbtCardUpdates, "Aktualizace"),
+    (AbtUpdatesBody, "Poznámky k vydání a novější verze jsou zveřejněny na GitHubu."),
+    (AbtReleases, "Otevřít vydání na GitHubu"),
 ];

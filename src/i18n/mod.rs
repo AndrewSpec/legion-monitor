@@ -111,6 +111,7 @@ pub enum Key {
     NavProfiles,
     NavRescue,
     NavAdvanced,
+    NavAbout,
 
     // ── rescue ──────────────────────────────────────────────────────────
     RescueDesc,
@@ -250,6 +251,17 @@ pub enum Key {
     ResetYes,
     CardLog,
     LogEmpty,
+
+    // ── about ───────────────────────────────────────────────────────────
+    AbtDesc,
+    AbtTagline,
+    AbtCardApp,
+    AbtAuthor,
+    AbtLicense,
+    AbtSource,
+    AbtCardUpdates,
+    AbtUpdatesBody,
+    AbtReleases,
 
     // ── monitor feature names ──────────────────────────────────────────
     FnBrightness,

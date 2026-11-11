@@ -1,5 +1,6 @@
 use crate::ui::*;
 
+mod about;
 mod advanced;
 mod color;
 mod image;
@@ -17,7 +18,12 @@ impl App {
         let section = self.section;
         // The rescue page must stay usable without a picture or a monitor:
         // that is the whole point of arming a restore before reconnecting.
-        let on = self.connected() || matches!(section, Section::Profiles | Section::Rescue);
+        // About carries only build metadata, so it works offline too.
+        let on = self.connected()
+            || matches!(
+                section,
+                Section::Profiles | Section::Rescue | Section::About
+            );
         ui.add_enabled_ui(on, |ui| match section {
             Section::Overview => self.page_overview(ui),
             Section::Image => self.page_image(ui),
@@ -27,6 +33,7 @@ impl App {
             Section::Profiles => self.page_profiles(ui),
             Section::Rescue => self.page_rescue(ui),
             Section::Advanced => self.page_advanced(ui),
+            Section::About => self.page_about(ui),
         });
     }
 }

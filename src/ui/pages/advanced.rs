@@ -145,16 +145,6 @@ impl App {
     // ── VCP code helpers ─────────────────────────────────────────────────
 }
 
-/// "Label — value" row in the technical information card.
-fn info_row(ui: &mut Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(label).size(12.0).color(DIM));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(RichText::new(value).size(12.0).color(TEXT));
-        });
-    });
-}
-
 /// Hardware/protocol versions are "major.minor" encoded in two bytes.
 fn info_value(code: u8, value: u16) -> String {
     match code {

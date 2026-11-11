@@ -14,6 +14,7 @@ pub enum Section {
     Profiles,
     Rescue,
     Advanced,
+    About,
 }
 
 impl Section {
@@ -38,6 +39,7 @@ impl Section {
             "profiles" | "profile" => Some(Section::Profiles),
             "rescue" | "ratunek" => Some(Section::Rescue),
             "advanced" | "zaawansowane" => Some(Section::Advanced),
+            "about" | "o-aplikacji" => Some(Section::About),
             _ => None,
         }
     }

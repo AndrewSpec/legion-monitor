@@ -338,4 +338,16 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (DumpNoMonitor, "Moniteur non connecté."),
     (DumpConnect, "Connectez le moniteur en USB-C / DP / HDMI et réessayez."),
     (DumpDetails, "Détails techniques : {}"),
+
+    // ── about ─────────────────────────────────────────────────────────
+    (NavAbout, "À propos"),
+    (AbtDesc, "Version de l’application, auteur et liens du projet."),
+    (AbtTagline, "Contrôle du moniteur Lenovo Legion R45w-30 via DDC/CI."),
+    (AbtCardApp, "Application"),
+    (AbtAuthor, "Auteur"),
+    (AbtLicense, "Licence"),
+    (AbtSource, "Code source"),
+    (AbtCardUpdates, "Mises à jour"),
+    (AbtUpdatesBody, "Les notes de version et les nouvelles versions sont publiées sur GitHub."),
+    (AbtReleases, "Ouvrir les versions sur GitHub"),
 ];
