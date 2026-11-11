@@ -114,7 +114,7 @@ pub fn replay_plan(values: &BTreeMap<String, u16>) -> Vec<(u8, u16)> {
             let code = parse_key(k)?;
             if !replay_safe(code)
                 || (code == 0xf2 && *v > 1)
-                || (code == 0xf5 && *v != 0 && crate::catalog::layout_for(*v).is_none())
+                || (code == 0xf5 && *v != 0 && crate::catalog::true_split_for(*v).is_none())
             {
                 return None;
             }

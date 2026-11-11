@@ -54,6 +54,13 @@ pub struct App {
     started: bool,
     /// Source of the left and the right window of a split (VCP F0/F0).
     win_sources: [u16; 2],
+    /// Last PIP corner chosen in the interface. The monitor's 0x95..0x98
+    /// rectangle is the source of truth when it can be read.
+    pip_corner: catalog::PipCorner,
+    /// Mode the user just asked for. The registers cannot reliably separate
+    /// PIP from True Split (F4 reports 0x0201 for both), so an explicit
+    /// choice wins until the next reconnect or a failed write.
+    mode_hint: Option<MultiMode>,
     /// Desktop topology: is there another screen to fall back to?
     displays: Displays,
     /// Detected shape of the monitor's picture area, used by the overview.
@@ -64,6 +71,14 @@ pub struct App {
     pub(crate) settings: Settings,
     pub(crate) lang: Lang,
     pub(crate) tr: Strings,
+    /// Rescue restore is in flight; the next notice decides the result.
+    rescue_pending: bool,
+    /// Last connection probe from the rescue page.
+    rescue_probe: Instant,
+    /// One-shot restore scheduled after the monitor reconnects.
+    rescue_after: Option<Instant>,
+    /// Last rescue result, shown on the rescue page.
+    rescue_status: Option<(Key, bool)>,
 }
 
 impl App {
@@ -94,12 +109,18 @@ impl App {
             log: Vec::new(),
             started: false,
             win_sources: [0, 0],
+            pip_corner: catalog::PipCorner::default(),
+            mode_hint: None,
             displays: Displays::default(),
             panel: Panel::default(),
             self_source: None,
             settings,
             lang,
             tr: i18n::strings(lang),
+            rescue_pending: false,
+            rescue_probe: Instant::now(),
+            rescue_after: None,
+            rescue_status: None,
         }
     }
 
@@ -224,8 +245,42 @@ impl App {
         self.vals.get(&code).map(|v| v.max).unwrap_or(100)
     }
 
-    fn multi_mode(&self) -> MultiMode {
-        catalog::multi_mode(self.value(0xf2), self.value(0xf4))
+    pub(crate) fn multi_mode(&self) -> MultiMode {
+        self.mode_hint.unwrap_or_else(|| self.derive_multi_mode())
+    }
+
+    /// Reads the mode from the registers when the user has not just chosen one.
+    ///
+    /// F4 is a PIP-size register and the R45w-30 reports 0x0201 for every
+    /// active split, so it cannot tell PIP from True Split on its own. F2 is
+    /// the discriminator on this monitor: its low byte is 1 while PIP is open
+    /// and 3 while True Split is active. 0x60 is not usable here: True Split
+    /// also reports only the left source there, so a single byte is not proof
+    /// of PIP.
+    fn derive_multi_mode(&self) -> MultiMode {
+        let base = catalog::multi_mode(self.value(0xf2), self.value(0xf4));
+        if base == MultiMode::PictureByPicture {
+            return match self.value(0xf2).map(|value| value & 0xff) {
+                Some(1) => MultiMode::PictureInPicture,
+                Some(3) => MultiMode::PictureByPicture,
+                _ => {
+                    // Older firmware leaves 0xF2 at 0 here. A supported F5
+                    // layout still means True Split; otherwise a placed PIP
+                    // rectangle is the only evidence of PIP.
+                    if self.value(0xf5).and_then(catalog::true_split_for).is_some() {
+                        return base;
+                    }
+                    if self.pip_rect_from_registers().is_some() {
+                        return MultiMode::PictureInPicture;
+                    }
+                    base
+                }
+            };
+        }
+        if base == MultiMode::Unknown && self.pip_rect_from_registers().is_some() {
+            return MultiMode::PictureInPicture;
+        }
+        base
     }
 
     fn connector(&self) -> &str {
@@ -385,13 +440,222 @@ impl App {
             .or_else(|| catalog::window_sources(self.value(0x60)))
     }
 
+    /// PIP rectangle reported by the monitor, as fractions of the picture.
+    ///
+    /// 0x95..0x98 take panel pixels, not percentages: on the R45w-30 the
+    /// maxima are 4960/1320/5120/1440. An empty, inverted or out-of-range
+    /// rectangle is ignored rather than drawn.
+    fn pip_rect_from_registers(&self) -> Option<[f32; 4]> {
+        let left = self.value(0x95)?;
+        let top = self.value(0x96)?;
+        let right = self.value(0x97)?;
+        let bottom = self.value(0x98)?;
+        let (width, height) = self.panel.pixel_size();
+        if right > left && bottom > top && right as u32 <= width && bottom as u32 <= height {
+            Some([
+                left as f32 / width as f32,
+                top as f32 / height as f32,
+                right as f32 / width as f32,
+                bottom as f32 / height as f32,
+            ])
+        } else {
+            None
+        }
+    }
+
+    /// Corner of the PIP window: the reported rectangle, then the last choice.
+    pub(crate) fn pip_corner_from_registers(&self) -> catalog::PipCorner {
+        let (Some(left), Some(top), Some(right), Some(bottom)) = (
+            self.value(0x95),
+            self.value(0x96),
+            self.value(0x97),
+            self.value(0x98),
+        ) else {
+            return self.pip_corner;
+        };
+        let (width, height) = self.panel.pixel_size();
+        catalog::PipCorner::from_pixels(left, top, right, bottom, width, height)
+            .unwrap_or(self.pip_corner)
+    }
+
+    /// Source this computer drives the monitor from.
+    ///
+    /// 0x60 is the register the monitor actually displays, so it wins over
+    /// the configured "this computer" source. In a split the low byte is the
+    /// left/primary window and the high byte the right/secondary one; using
+    /// the high byte here is what made HDMI the main picture and USB-C the
+    /// PIP window.
+    fn main_source(&self) -> Option<u16> {
+        match self.value(0x60) {
+            Some(raw) if raw > 0xff => Some(raw & 0xff),
+            Some(raw) if raw != 0 => Some(raw),
+            _ => self
+                .self_source
+                .or_else(|| self.split_pair().map(|pair| pair.0)),
+        }
+    }
+
+    /// Saves the current single picture as the rescue baseline.
+    ///
+    /// A split is deliberately refused: the rescue tab exists to undo a
+    /// half-written split, so the saved state must be a plain picture.
+    pub(crate) fn save_rescue_baseline(&mut self, manual: bool) {
+        let result = if !self.connected() {
+            Err(Key::RescueNoMonitor)
+        } else if catalog::multi_mode(self.value(0xf2), self.value(0xf4)) != MultiMode::Off {
+            // F4 can read 0 on monitors that do not expose PIP size, so ask
+            // the same decoder the rest of the app uses instead of requiring
+            // the literal 0x0200.
+            Err(Key::RescueNeedSingle)
+        } else {
+            self.value(0x60)
+                .filter(|value| *value > 0 && *value <= 0xff)
+                .map(|source| crate::settings::RescueBase {
+                    source,
+                    f2: self.value(0xf2).unwrap_or(0),
+                    f5: self.value(0xf5).unwrap_or(0),
+                    brightness: self.value(0x10),
+                    contrast: self.value(0x12),
+                    saved_at: crate::settings::unix_now(),
+                })
+                .ok_or(Key::RescueNeedSingle)
+        };
+        match result {
+            Ok(base) => {
+                self.settings.rescue = Some(base);
+                if let Err(error) = self.settings.save() {
+                    if manual {
+                        let text = self.tf(Key::ErrSaveSettings, error);
+                        self.toast = Some((text, true, Instant::now()));
+                    }
+                } else if manual {
+                    self.rescue_status = Some((Key::RescueSaved, false));
+                }
+            }
+            Err(key) => {
+                if manual {
+                    self.rescue_status = Some((key, true));
+                }
+            }
+        }
+    }
+
+    /// Sends the saved single picture to the worker.
+    pub(crate) fn restore_rescue(&mut self) {
+        let Some(base) = self.settings.rescue.clone() else {
+            self.rescue_status = Some((Key::RescueEmpty, true));
+            return;
+        };
+        if !self.connected() || self.busy {
+            self.rescue_status = Some((Key::RescueNoMonitor, true));
+            return;
+        }
+        self.rescue_after = None;
+        self.rescue_pending = true;
+        self.send(Cmd::Rescue {
+            source: base.source,
+            brightness: base.brightness,
+            contrast: base.contrast,
+        });
+    }
+
+    /// Re-checks the connection while armed and fires the one-shot restore
+    /// after the monitor comes back.
+    fn maybe_rescue(&mut self, ctx: &egui::Context) {
+        // Poll even while connected: after a black screen the monitor can
+        // still answer DDC until it is unplugged, and only a later probe
+        // notices that it went away and came back.
+        if self.settings.rescue_armed
+            && !self.busy
+            && !self.rescue_pending
+            && self.rescue_probe.elapsed() >= Duration::from_secs(3)
+        {
+            self.rescue_probe = Instant::now();
+            self.send(Cmd::Init);
+        }
+        if let Some(at) = self.rescue_after {
+            if Instant::now() >= at && !self.busy && !self.rescue_pending {
+                self.rescue_after = None;
+                if self.connected() {
+                    self.restore_rescue();
+                }
+            }
+        }
+        if self.settings.rescue_armed || self.rescue_after.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+    }
+
+    /// The source currently sitting in the PIP window, if known.
+    fn pip_source(&self) -> Option<u16> {
+        self.split_pair()
+            .map(|pair| pair.1)
+            .or_else(|| Some(self.win_sources[1]).filter(|code| *code != 0))
+    }
+
+    /// Fallback source when PIP is opened without one. The monitor may keep a
+    /// stale PIP source (often an unconnected DisplayPort) in 0xF0, so do not
+    /// trust it: mirror the current picture until the user picks a second
+    /// source in the PIP card.
+    fn default_pip_source(&self) -> Option<u16> {
+        self.main_source()
+    }
+
+    /// Opens PIP, leaving a True Split first.
+    ///
+    /// The worker closes PBP with the full single-picture plan and checks
+    /// 0xF4 before it writes the PIP selector. Writing only `0xA5 = 0` first
+    /// left the PBP window open; the following `0xA5 = 0x0100` froze the
+    /// monitor's OSD and the source write turned the main picture black.
+    pub(crate) fn enter_pip(&mut self, corner: catalog::PipCorner) {
+        // Only a source the user picked in this session is a safe default;
+        // 0xF0/split_pair can still hold an unconnected input from an old PBP.
+        let main = self.main_source();
+        let chosen = Some(self.win_sources[1]).filter(|code| *code != 0 && Some(*code) != main);
+        let source = chosen.or_else(|| self.default_pip_source());
+        self.enter_pip_with(corner, source);
+    }
+
+    fn enter_pip_with(&mut self, corner: catalog::PipCorner, source: Option<u16>) {
+        if !self.can_edit() {
+            return;
+        }
+        let main = self.main_source();
+        // Trust the monitor's F4 over the cached mode: after a failed or
+        // partial PIP attempt F4 can say 0x0201 while the UI still thinks the
+        // page is in single mode, and skipping the close leaves PIP on a
+        // half-written window.
+        let leave_pbp = match self.value(0xf4) {
+            Some(0x0201) => true,
+            Some(0x0200) => false,
+            _ => matches!(
+                self.multi_mode(),
+                MultiMode::PictureByPicture | MultiMode::Unknown
+            ),
+        };
+        let (width, height) = self.panel.pixel_size();
+        self.pip_corner = corner;
+        self.mode_hint = Some(MultiMode::PictureInPicture);
+        self.send(Cmd::ApplyPip {
+            corner: corner.rect(width, height),
+            main,
+            source,
+            leave_pbp,
+        });
+    }
+
     /// Source picker for one window of a split.
     ///
     /// Picking a source writes VCP 0x60 as `(right << 8) | left` — the same
     /// pair Lenovo's service writes. No selector and no swap are involved,
     /// so the right half is reached directly and the monitor's OSD stays alive.
     fn window_source_picker(&mut self, ui: &mut Ui, window: usize) {
-        let label = if window == 0 {
+        let pip = self.multi_mode() == MultiMode::PictureInPicture;
+        // In PIP there is no "right half": the second picture is the floating
+        // PIP window, so the picker uses that name instead of a side.
+        let label = if pip {
+            self.t(Key::ModePip)
+        } else if window == 0 {
             self.t(Key::WindowLeft)
         } else {
             self.t(Key::WindowRight)
@@ -400,10 +664,16 @@ impl App {
         ui.add_space(6.0);
         let sources = self.input_sources();
         let pair = self.split_pair();
-        let current = pair
-            .map(|p| if window == 0 { p.0 } else { p.1 })
-            .unwrap_or(0);
-        let enabled = pair.is_some() && !self.busy && matches!(self.conn, Conn::Ok(_));
+        let current = if pip {
+            self.pip_source().unwrap_or(0)
+        } else {
+            pair.map(|p| if window == 0 { p.0 } else { p.1 })
+                .unwrap_or(0)
+        };
+        // A PIP source is independent of the F0 pair: the monitor can accept
+        // it even when the pair register is unreadable. PBP still needs both
+        // halves because it writes them together.
+        let enabled = (pip || pair.is_some()) && !self.busy && matches!(self.conn, Conn::Ok(_));
         let mut chosen: Option<u16> = None;
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -417,7 +687,7 @@ impl App {
         if let Some(code) = chosen {
             self.apply_window_source(window, code);
         }
-        if pair.is_none() {
+        if !pip && pair.is_none() {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(self.t(Key::WindowsUnknown))
@@ -428,24 +698,72 @@ impl App {
         ui.add_space(6.0);
     }
 
+    /// Source picker for the floating PIP window.
+    ///
+    /// Picking a source also opens PIP when it is off: the monitor keeps the
+    /// window source independently of the rectangle, so this is the shortest
+    /// path from "single" to a visible second picture.
+    fn pip_source_picker(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new(self.t(Key::PipSource)).size(13.0).color(TEXT));
+        ui.add_space(6.0);
+        let sources = self.input_sources();
+        let current = Some(self.win_sources[1])
+            .filter(|code| *code != 0)
+            .or_else(|| self.pip_source())
+            .unwrap_or(0);
+        let mut chosen: Option<u16> = None;
+        ui.add_enabled_ui(!self.busy && matches!(self.conn, Conn::Ok(_)), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (code, name) in &sources {
+                    if pill(ui, name, current == *code).clicked() {
+                        chosen = Some(*code);
+                    }
+                }
+            });
+        });
+        if let Some(code) = chosen {
+            // Resolve the previous mode before the hint is set: a source pick
+            // while PIP is off must also place the window, not just write 0xA5.
+            let was_pip = self.multi_mode() == MultiMode::PictureInPicture;
+            let corner = if was_pip {
+                self.pip_corner
+            } else {
+                self.pip_corner_from_registers()
+            };
+            self.win_sources[1] = code;
+            if was_pip {
+                self.pip_corner = corner;
+                self.mode_hint = Some(MultiMode::PictureInPicture);
+                self.send(Cmd::ApplyWindow {
+                    selector: 0x0100,
+                    source: code,
+                });
+            } else {
+                self.enter_pip_with(corner, Some(code));
+            }
+        }
+        ui.add_space(6.0);
+    }
+
     /// Writes the source of one window of a split.
     ///
-    /// In PBP both sources are written together to 0x60; in PIP the monitor
-    /// keeps its separate window selector `0xA5 = 0x0100`.
+    /// In True Split both sources are written together to 0x60; in PIP the
+    /// monitor keeps its separate window selector `0xA5 = 0x0100`, so the
+    /// source can be set even when the F0 pair is unreadable.
     fn apply_window_source(&mut self, window: usize, source: u16) {
         if self.busy || !matches!(self.conn, Conn::Ok(_)) {
             return;
         }
-        let Some((left, right)) = self.split_pair() else {
-            self.toast = Some((
-                self.t(Key::WindowsUnknown).to_string(),
-                true,
-                Instant::now(),
-            ));
-            return;
-        };
         match self.multi_mode() {
             MultiMode::PictureByPicture => {
+                let Some((left, right)) = self.split_pair() else {
+                    self.toast = Some((
+                        self.t(Key::WindowsUnknown).to_string(),
+                        true,
+                        Instant::now(),
+                    ));
+                    return;
+                };
                 let (left, right) = if window == 0 {
                     (source, right)
                 } else {
@@ -453,10 +771,10 @@ impl App {
                 };
                 // A valid layout is left untouched: changing only a source
                 // must not blank the picture with a redundant F5 write.
-                let layout = if self.value(0xf5).and_then(catalog::layout_for).is_some() {
+                let layout = if self.value(0xf5).and_then(catalog::true_split_for).is_some() {
                     None
                 } else {
-                    Some(0x0101)
+                    Some(catalog::TrueSplit::Half.value())
                 };
                 self.win_sources = [left, right];
                 self.send(Cmd::ApplySplit {
@@ -468,6 +786,7 @@ impl App {
             }
             MultiMode::PictureInPicture => {
                 self.win_sources[1] = source;
+                self.mode_hint = Some(MultiMode::PictureInPicture);
                 self.send(Cmd::ApplyWindow {
                     selector: 0x0100,
                     source,
@@ -482,12 +801,26 @@ impl App {
         while let Ok(ev) = self.worker.rx.try_recv() {
             match ev {
                 Ev::Conn(c) => {
+                    let connected = matches!(c, Conn::Ok(_));
+                    let was_connected = matches!(self.conn, Conn::Ok(_));
                     self.vals.clear();
                     self.pending.clear();
-                    if matches!(c, Conn::Err(_)) {
+                    self.mode_hint = None;
+                    if connected {
+                        self.rescue_probe = Instant::now();
+                        if connected
+                            && !was_connected
+                            && self.settings.rescue_armed
+                            && self.settings.rescue.is_some()
+                            && !self.rescue_pending
+                        {
+                            self.rescue_after = Some(Instant::now() + Duration::from_secs(1));
+                        }
+                    } else {
                         self.self_source = None;
                         self.win_sources = [0, 0];
                         self.displays = Displays::default();
+                        self.rescue_after = None;
                     }
                     self.conn = c;
                     self.panel = Panel::default();
@@ -515,12 +848,47 @@ impl App {
                     }
                     self.refresh_self_source();
                     self.refresh_panel();
+                    if self.settings.rescue.is_none() {
+                        self.save_rescue_baseline(false);
+                    }
                 }
                 Ev::Busy(b) => self.busy = b,
                 Ev::Notice(key, argument, err) => {
+                    if matches!(
+                        key,
+                        Key::WriteFailed | Key::WriteMismatch | Key::WriteUnconfirmed
+                    ) {
+                        self.mode_hint = None;
+                    }
                     let msg = self.tf(key, &argument);
                     self.log.push(LogLine::Key(key, vec![argument]));
                     self.toast = Some((msg, err, Instant::now()));
+                    if self.rescue_pending {
+                        self.rescue_pending = false;
+                        match key {
+                            Key::WriteConfirmed => {
+                                self.settings.rescue_armed = false;
+                                if let Err(error) = self.settings.save() {
+                                    self.log.push(LogLine::Text(error));
+                                }
+                                self.rescue_status = Some((Key::RescueRestored, false));
+                                self.toast = Some((
+                                    self.t(Key::RescueRestored).into(),
+                                    false,
+                                    Instant::now(),
+                                ));
+                            }
+                            _ => {
+                                // The worker can also answer ErrNotConnected when
+                                // the monitor vanishes between probes. Keep the
+                                // baseline armed, but show that this attempt
+                                // failed instead of silently waiting forever.
+                                self.rescue_status = Some((Key::RescueFailed, true));
+                                self.toast =
+                                    Some((self.t(Key::RescueFailed).into(), true, Instant::now()));
+                            }
+                        }
+                    }
                 }
                 Ev::Log(line) => {
                     self.log.push(line);
@@ -572,6 +940,7 @@ impl eframe::App for App {
         }
         self.pump(ctx);
         self.hotkeys(ctx);
+        self.maybe_rescue(ctx);
 
         egui::TopBottomPanel::top("bar")
             .exact_height(72.0)

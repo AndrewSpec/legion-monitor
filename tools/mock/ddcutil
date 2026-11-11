@@ -2,7 +2,8 @@
 # Offline stand-in for ddcutil used by the GUI checks in tools/mock/README.md.
 #
 # LEGION_MOCK_SCENARIO selects a canned monitor state:
-#   single-16:9, single-21:9, single-32:9, pbp-32:9, pbp-32:9-75, pip-21:9
+#   single-16:9, single-21:9, single-32:9, pbp-32:9, pbp-32:9-75, pip-21:9,
+#   offline
 #
 # It only implements the subcommands this application calls: detect,
 # capabilities and --terse getvcp. Values are plausible but not measured.
@@ -63,6 +64,18 @@ case "$scenario" in
         f4="0201"
         f5="0401"
         ;;
+    true-split-stale)
+        # R45w-30 after the OSD enabled True Split 50/50: only the left source
+        # is exposed in 0x60, and F5 still holds a stale value.
+        model="Lenovo Legion R45w-30"
+        brightness=96
+        contrast=83
+        source="0031"
+        f0="0006"
+        f2="0103"
+        f4="0201"
+        f5="0402"
+        ;;
     pip-21:9)
         # Main DisplayPort (0x0F), inset HDMI 2 (0x12).
         model="Legion R34w-30"
@@ -91,6 +104,10 @@ blue=98
 
 case "$1" in
     detect)
+        if [ "$scenario" = "offline" ]; then
+            echo "No displays found!" >&2
+            exit 1
+        fi
         cat <<EOF
 Display 1
    I2C bus:  /dev/i2c-7

@@ -7,15 +7,27 @@
 
 Control your **Lenovo Legion R45w-30** on Linux over DDC/CI without using its
 physical buttons. The Rust GUI (egui/eframe) exposes brightness, contrast, color
-and input controls, plus **experimental Multi-view** controls (PiP/PbP and window
-layouts). All monitor communication goes through `ddcutil`.
+and input controls, plus **experimental Multi-view** controls (True Split and
+picture-in-picture). All monitor communication goes through `ddcutil`.
 
-**Hardware support is partly verified.** The direct two-source PBP write and all
-input switches were confirmed on the physical R45w-30 on 2026-11-11. The safe
-single-mode exit path described below is implemented but has not been exercised
-on hardware yet. The mapping of all eight layout previews and the PiP geometry
-still need a check on the monitor. Recent hardware tests also found ignored
-brightness writes; see
+**Hardware support is partly verified.** The direct two-source True Split write
+and all input switches were confirmed on the physical R45w-30 on 2026-11-11.
+True Split is limited to the two ratios the monitor accepts (50/50 and about
+70/30). The PIP rectangle uses Lenovo's VCP `0x95`–`0x98`, which take panel
+pixels rather than percentages. Opening PIP from True Split exposed a firmware
+hazard: the PBP window must be closed with the full single-picture sequence
+first, because `0xA5 = 0x0100` while PBP is active freezes the OSD, and a
+following `0x60` write can point the main picture at an inactive source (black
+screen). The application now closes PBP, verifies through `0xF4` that the
+monitor reports a single picture, writes the rectangle (`0x95`–`0x98`) while
+the monitor is still single, checks that it reads back, selects the PIP window,
+confirms through `0xF4` that it opened, and only then writes the PIP source. It does
+not write `0xA4`: the monitor rejected the show value in testing and a mask left
+at zero blanks the whole picture. The monitor often answers `EIO` to `0xA5`
+while still applying it, so that write is verified by state instead of its
+return code. See [Protocol findings](#protocol-findings). PIP placement itself
+is not confirmed on the monitor yet.
+Recent hardware tests also found ignored brightness writes; see
 [Local hardware test results](#local-hardware-test-results-2026-11-10).
 
 ![Legion Monitor interface](docs/screenshot.png)
@@ -29,9 +41,15 @@ rectangle. The aspect ratio comes from, in order: a known Legion model
 (`R45w-30` 32:9, `R34w-30` 21:9), the monitor's EDID physical image size, the
 active desktop mode while no split is active, and finally a labelled 16:9
 fallback. The screen shows the single input or the PBP/PiP panes, both window
-sources, the share of the two layouts verified on the R45w-30 (50/50 and 75/25),
-and marks the input used by this computer. A split is marked approximate unless
-the monitor confirmed its layout.
+sources, the share of the two True Split layouts the R45w-30 accepts (50/50 and
+about 70/30), or the PIP window in the chosen corner, and marks the input used
+by this computer. A True Split is marked approximate unless the monitor
+confirmed its layout.
+
+The Multi-view page reuses this drawing. Its True Split card offers the two
+layouts the monitor accepts; the picture-in-picture card offers the four corners
+of the floating window, which occupies a quarter of the screen. The drawing and
+both cards use the same bezel and panes as the Overview.
 
 ## Screenshots
 
@@ -41,9 +59,9 @@ provide. Mock values are illustrative, not measurements.
 
 <p>
   <img src="docs/screenshots/overview-pbp-en.png" width="49%" alt="Overview with a 32:9 monitor drawing, USB-C left and HDMI 1 right">
-  <img src="docs/screenshots/multiview-en.png" width="49%" alt="Multi-view page with mode, layout and window-source controls">
+  <img src="docs/screenshots/multiview-en.png" width="49%" alt="Multi-view page with the monitor drawing, True Split layouts and PIP corners">
 </p>
-<p align="center"><sub>Overview: PBP 50/50 on a 32:9 panel · Multi-view: layout and per-window sources</sub></p>
+<p align="center"><sub>Overview: True Split 50/50 on a 32:9 panel · Multi-view: True Split and PIP previews</sub></p>
 
 <p>
   <img src="docs/screenshots/image-en.png" width="49%" alt="Picture page with brightness, contrast, gamma and sharpness">
@@ -56,6 +74,11 @@ provide. Mock values are illustrative, not measurements.
   <img src="docs/screenshots/overview-single-en.png" width="49%" alt="Overview with a single 32:9 full-screen source">
 </p>
 <p align="center"><sub>Input selection · Overview in single mode</sub></p>
+
+<p>
+  <img src="docs/screenshots/rescue-en.png" width="49%" alt="Rescue page while the monitor is disconnected, with the saved single picture and reconnect restore controls">
+</p>
+<p align="center"><sub>Rescue: saved single picture while disconnected, ready for reconnect restore</sub></p>
 
 ## Requirements
 
@@ -151,12 +174,37 @@ returned, so an unsupported feature leaves no trace in the interface.
 | Picture | Brightness, contrast, sharpness, saturation, hue, gamma and black level — only the features the monitor reports |
 | Color | Color temperature, presets and RGB gains |
 | Inputs | DisplayPort, HDMI 1, HDMI 2 and USB-C; the reported active input is highlighted |
-| Multi-view (experimental) | Mode selection, eight layout codes and the source of each window; PBP writes both sources in one `0x60` pair, without a swap. Leaving a split checks for a second screen and, when there is none, keeps this computer’s source visible; geometry and PiP mapping remain unverified |
+| Multi-view (experimental) | The same monitor card as the Overview, the two supported True Split ratios (50/50 and about 70/30) and the four PIP corners with a quarter-size window; True Split writes both sources in one `0x60` pair, without a swap, and PIP is placed with `0x95`–`0x98` in panel pixels, after PBP is closed and `0xF4` confirms a single picture; the PIP source is written only after the rectangle reads back and `0xF4` reports the window. Leaving a split checks for a second screen and, when there is none, keeps this computer’s source visible; PIP placement still needs a clean hardware run |
 | Profiles | A/B configurations and any number of named profiles |
+| Rescue | A snapshot of a working single picture, saved automatically at startup and restorable without seeing the screen; while armed, the app keeps probing for the monitor, notices a reconnect and restores the saved source, split state and picture settings |
 | Advanced | Volume, mute, power mode, manufacturer-specific features and reset |
 
 Keyboard shortcuts: **F1** applies configuration A, **F2** applies configuration B,
 and **F5** refreshes the state.
+
+## Rescue mode
+
+The Rescue page exists for the case where a split leaves the monitor without a
+usable picture. It does not depend on the monitor for rendering: the page stays
+available while disconnected, so it can be opened after the desktop has already
+lost the display.
+
+On the first successful read of a single picture (`0x60` is one source byte and
+`0xF4` is not a live split), the app stores the input, the split registers,
+brightness and contrast in `settings.json`. The **Save current state** button
+refreshes that snapshot while the picture is correct.
+
+**Arm after reconnect** persists an armed flag. While armed, the app probes for
+the monitor every three seconds even when the picture is already working, so it
+notices both an unplug and a later replug. When the monitor answers again, it
+sends the single-picture plan for the saved source plus the saved brightness and
+contrast, then disarms itself if the readback confirms the source. A failed
+restore keeps the flag armed and shows the error, so it can be retried manually.
+The restore writes are the same ones used by the single-mode exit, including the
+tolerance for the monitor's expected `EIO` during a mode change.
+
+The snapshot is a convenience, not a firmware backup: it restores DDC settings
+and the single-picture mode, not an OSD-only state such as HDR.
 
 ## Languages
 
@@ -230,10 +278,20 @@ changes may interrupt the EDID/DDC connection. The color preset is restored
 after temperature/RGB settings, since those writes can change the preset.
 This ordering still needs a hardware roundtrip: some preset/RGB combinations
 may not coexist. Multi-view settings are written in the order `0xF5`, then
-`0xF2` (legacy exchange), with the input switch last. A PBP source change writes
-`0xA5 = 0x0200`, an optional `0xF5` layout repair and then both sources in one
-`0x60` write. Leaving a split uses a different sequence, because closing PBP can
-leave the monitor on either half:
+`0xF2` (legacy exchange), with the input switch last. A True Split source change
+writes `0xA5 = 0x0200`, an optional `0xF5` layout repair and then both sources in
+one `0x60` write. Opening PIP from True Split first runs the full single-picture
+exit below, then reads `0xF4` and refuses to continue while the monitor still
+reports `0x0201` (the PBP window is open). Only then it selects PIP
+writes `0x95`–`0x98` in panel pixels while the monitor is still single, and
+only then selects the PIP window with `0xA5 = 0x0100`. The monitor can answer
+`EIO` to `0xA5` while still switching; that write is therefore checked by
+reading `0xF4`, not by its return code. It writes the PIP source to `0x60` only
+when the rectangle matches and the monitor
+reports an open window (`0x0201`); otherwise the source write is skipped, so the
+main picture cannot go black. `0xA4` is not written at all: its show value was
+rejected in testing and a zero mask blanks the entire picture. Leaving a split uses a different sequence, because closing PBP can leave
+the monitor on either half:
 
 1. the application determines which monitor input this computer is using
    (the single-mode `0x60` value, a connector match in the active PBP pair, or
@@ -262,14 +320,23 @@ These findings come from static analysis of Lenovo's Windows background service
 PIP/PBP web plugin, the `supportedmodels.json` shipped with Lenovo Display
 Control Center 3.0.32161 (`vcpCodesDef`), and hardware observations. Accepting a
 `0xF2`/`0xF5` write and reading back its value does not prove that the physical
-picture matches a preview, that all eight geometries are mapped correctly, or
-that PiP/PbP selection works as intended.
+picture matches a preview. The PIP path was exercised twice: the first attempt
+exposed the PBP-close hazard below and left a zero rectangle, the second wrote
+the rectangle while the monitor was still single, opened the window with
+`0xA5 = 0x0100`, verified `0xF4 = 0x0201`, and mirrored the USB-C source. The
+register readback is correct; a visual check of the quarter and a different PIP
+source are still pending.
+
+Longer session notes, including safe write sequences and failure modes, are in
+[notes/ddc-protocol.md](notes/ddc-protocol.md).
 
 | Feature | VCP | Evidence / direction | Notes |
 |---|---|---|---|
 | Multi-view control | `0xF2` | Write and readback observed | Lenovo calls it *PIP/PBP Swap*: `0` disables the PIP/PBP window, `1` swaps the sources, `3` leaves full-screen mode |
-| Layout selection | `0xF5` | Write and readback observed | Lenovo calls it *PBP Control*: low byte = position (`1` right, `2` left, `3` top, `4` bottom), high byte = ratio (`1` 1:1, `2` 2:1, `3` 1:2, `4` 3:1). On the R45w-30 only `0x0101` (50/50) and `0x0401` (70/30) change the picture, the `…02` values are rejected and `0x0201`/`0x0301` are ignored |
-| Layout status | `0xF4` | Read in the examined path | Lenovo calls it *PIP Size* (`0` min … `0x64` max); the R45w-30 uses it differently and reports `0x0201` for every active split |
+| True Split layout | `0xF5` | Write and readback observed | Lenovo calls it *PBP Control*: low byte = position (`1` right, `2` left, `3` top, `4` bottom), high byte = ratio (`1` 1:1, `2` 2:1, `3` 1:2, `4` 3:1). On the R45w-30 only `0x0101` (50/50) and `0x0401` (about 70/30) change the picture; the UI offers only those two |
+| Layout status | `0xF4` | Read in the examined path | Lenovo calls it *PIP Size* (`0` min … `0x64` max); the R45w-30 reports `0x0201` for every active split, so it cannot separate PIP from True Split. The app distinguishes them with the low byte of `0xF2` (`1` = PIP, `3` = True Split); a supported `0xF5` layout wins, because `0xF5` can be stale after a mode change |
+| Window mask | `0xA4` | Static analysis of Lenovo's `SetPIPWndRect`; write rejected on the R45w-30 | `0` hides the PIP window while it is moved, `0xFFFF` shows it again in Lenovo's code. The monitor rejected the show write in our path, and a mask left at `0` blanks the whole picture, so the application does not touch `0xA4` |
+| PIP window rectangle | `0x95`–`0x98` | Static analysis of Lenovo's `SetPIPWndRect`; VCP ranges read on the R45w-30 | Left, top, right and bottom in **panel pixels**: the R45w-30 reports maxima 4960/1320/5120/1440 for a 5120×1440 panel, so the app writes a half-size quadrant such as `(2560, 0, 5120, 720)`. The application writes `0x95`, `0x96`, `0x97`, `0x98` while the monitor is still single, verifies the readback, and only then selects the window with `0xA5 = 0x0100`; `GetPIPWndRect` reads the same four codes. Writing `0..100` here made a 100-pixel window and is the bug behind the first PIP attempt |
 | Window selection | `0xA5` | Write and readback observed | Lenovo calls it *Window Select*: `0x0000` closes PIP/PBP, `0x0100` selects the PIP window, `0x0200` the PBP window. The monitor never reads the selection back |
 | Window inputs | `0xF0` | Read in the examined path | Lenovo calls it *Audio Source*; on the R45w-30 it reports the two window sources (low byte = left window, high byte = right) but is unreadable most of the time (`0xFFFF`) |
 | Input source | `0x60` | Read/write control | `0x0f` DP, `0x11` HDMI 1, `0x12` HDMI 2, `0x31` USB-C. Outside a split it takes one source byte. In PBP Lenovo writes the whole pair as `(right << 8) | left`; that is the direct way to set the right half, with no `0xA5` selector and no `0xF2` exchange. `0xA5 = 0x0200` was verified on the R45w-30; `0xA5 = 0x0100` in PBP froze the monitor's OSD |
@@ -277,8 +344,13 @@ that PiP/PbP selection works as intended.
 
 Lenovo's `SetPIPPBPState` opens PBP with `0xA5 = 0x0200`; `SetPBPMode` writes the
 `F5` layout; `SetPIPPBPConfig` reads `F5` and writes `0x60` as the two-source pair.
-The examined Multi-view path does not write `F4` directly. This does not prove
-that other paths or versions never write it.
+PIP uses a different path: `0xA5 = 0x0100` selects the PIP window, `0x60` sets its
+source, and `SetPIPWndRect` places it with `0xA4 = 0`, `0x95`–`0x98`, then
+`0xA4 = 0xFFFF` in Lenovo's code. The application writes the selector and the
+rectangle but skips `0xA4`, because the monitor rejected the show value and a
+stuck zero mask blanks the picture. The examined path does not write `F4`
+directly. This does not
+prove that other paths or versions never write it.
 
 After an `F2`/`F5`/`0xA5` write, the monitor may disappear from the bus for
 several seconds (`EDID has changed`). Reads are therefore retried, and writes use
@@ -332,15 +404,47 @@ Other confirmed findings:
   hardware verification.
 - Switching the input from USB-C to HDMI 1 and back worked; the monitor kept
   answering over DDC while the picture was gone.
-- Multi-view: of the eight layout previews only two do anything on this monitor.
-  `0x0101` splits the picture 50/50 (confirmed on screen) and `0x0401` splits it 75/25.
-  The tiles show the raw register codes, so nothing misleading is drawn, but the
-  names ("four windows") are guesses from the Lenovo Windows service, not from a
-  measurement. The four "mirrored" values are rejected by the monitor and two more
-  are ignored, and the "picture in picture" button only writes `0xF2` and creates no
-  small window. `0xF4` always reports `0x0201` while a split is active, so it does not
-  describe the layout, and entering a split switches the desktop output from
-  5120×1440 to 2560×1440.
+- Multi-view: the monitor accepts only two True Split ratios. `0x0101` splits the
+  picture 50/50 (confirmed on screen) and `0x0401` about 70/30 (75/25 in the
+  register). Other `F5` values are rejected or ignored, so the UI no longer offers
+  them. PIP is placed with the `0x95`–`0x98` rectangle in panel pixels. The
+  first attempt opened PIP from True Split without closing the PBP window first:
+  `0xA5 = 0x0100` froze the OSD, the following source write moved the main
+  picture to an inactive input, and the panel went black with standby overlays
+  until it was power-cycled. The current code closes PBP with the single-picture
+  plan, checks that `0xF4` no longer reads `0x0201`, selects PIP, writes the
+  rectangle, verifies `0x95`–`0x98`, and writes the PIP source only after that
+  readback and `0xF4` reporting `0x0201`. The monitor returns `EIO` for `0xA5`
+  even when the selector lands, so the write is judged by state, not by its
+  return code. A later GUI attempt still showed HDMI as the main picture and
+  USB-C in the quarter: the old `main_source` preferred the saved "this
+  computer" input over the active `0x60`, so the main and secondary pictures
+  were effectively swapped. The app now takes the low byte of a `0x60` pair as
+  the main source before consulting the saved input. The USB-C quarter showed
+  no picture in that attempt; this remains unexplained.
+- True Split also reports a single source byte in `0x60` (only the left
+  window), and `0xF5` can stay stale (`0x0402`) after the mode changes. Mode
+  detection therefore uses the low byte of `0xF2`: `1` means PIP and `3` means
+  True Split; a supported `0xF5` layout takes precedence. This is what made the
+  app show PIP while the panel was in True Split 50/50.
+- Rescue commands sent while the monitor was gone used to leave the app busy
+  forever: the worker now releases the busy state on the no-monitor path.
+  Arming only schedules a probe: it never closes a working split by itself.
+  Auto-restore fires on a disconnected → connected transition, and a failed
+  attempt is not retried in a tight loop; "Restore now" is the explicit path.
+- `0xF4` reads `0x0201` while any split is active and `0x0200` in single mode:
+  it can confirm that PBP closed, but cannot separate an active PIP from True
+  Split. The main source is the low byte of a `0x60` pair when a split is
+  active, or the single byte otherwise — not the saved "this computer" setting.
+  PIP defaults to mirroring that source until a second input is picked, instead
+  of trusting a stale unconnected source from `0xF0`. Entering a split switches
+  the desktop output from 5120×1440 to 2560×1440.
+- Lenovo's R45w-30 manual lists USB-C, DisplayPort, HDMI 1 and HDMI 2 for both
+  the PIP background and foreground source; True Split is the mode restricted
+  to USB-C/DisplayPort. The manual therefore does not explain a blank USB-C PIP
+  window as an unsupported configuration. A useful next test is to set the same
+  main/PIP pair in the monitor's own OSD: if USB-C also stays blank there, the
+  limit is in the USB-C link or firmware, not in the application's DDC writes.
 - In PBP both window sources are written at once: `0x60 = (right << 8) | left`.
   The low byte is the left/primary window and the high byte the right/secondary
   one — the same encoding as `0xF0`, and the same write Lenovo's
@@ -358,24 +462,32 @@ Other confirmed findings:
   R45w-30: PBP was enabled, the left and right sources were selected, and all
   inputs switched correctly. The old swap path was not used and the OSD did not
   freeze.
-- The single-mode exit safety logic was added afterwards and is covered by unit
-  tests and an offline UI run only. It has not been sent to a monitor yet; the
-  hardware check is deliberately deferred until the laptop is connected again.
-  In particular, `0x60 = (source << 8) | source` while PBP is active is the
-  step that still needs confirmation on the R45w-30.
+- The single-mode exit writes (`0x60 = (source << 8) | source`, `0xA5 = 0`,
+  `0x60 = source`) were accepted during the black-screen recovery, but the
+  picture only returned after an AC power cycle, so this is not a clean
+  confirmation that they close PBP on their own. During recovery, `0xA5 = 0`
+  plus `0x60 = 0x31` did return `0xF4` to `0x0200` even though the writes
+  answered `EIO`/`No monitor detected`. The PIP entry path refuses to write the
+  selector while `0xF4` still reads `0x0201`, verifies the rectangle readback,
+  and skips the source write if either check fails; those guards and the pixel
+  rectangle are covered by unit tests and an offline UI run.
 
 The full field-by-field matrix and the remaining gaps are kept as local
 hardware notes outside the repository. A successful build and passing tests
 without a monitor do not establish
-hardware support. The PBP source path has since been exercised on the monitor;
-the layout geometry and PiP mapping remain unverified.
+hardware support. The True Split source path has been exercised on the monitor;
+the corrected PIP rectangle and the safe PIP entry sequence were verified by
+register readback (`0xF4` and `0x95`–`0x98`) with a mirrored source, but the
+quarter has not been visually confirmed and a different PIP source has not been
+exercised.
 
 ## Offline behavior
 
 When no monitor is connected, the application shows “Offline” and keeps all
 sections visible with empty values as an interface preview, not a claim of
-monitor support. Profiles remain accessible, but applying settings requires a
-connection and readback. “Search again” reruns monitor detection.
+monitor support. Profiles and Rescue remain accessible; applying settings
+requires a connection and readback, while the Rescue snapshot can be armed and
+saved offline. “Search again” reruns monitor detection.
 
 ## Code structure
 
@@ -383,21 +495,21 @@ connection and readback. “Search again” reruns monitor detection.
 |---|---|
 | `src/main.rs` | Entry point, `--dump`, `--page` |
 | `src/ddc.rs` | `ddcutil` calls and `detect`/`capabilities`/`getvcp` parsing |
-| `src/catalog.rs` | Feature catalog (VCP codes → `Key`), sections, layouts and modes |
+| `src/catalog.rs` | Feature catalog (VCP codes → `Key`), sections, True Split/PIP geometry and modes |
 | `src/i18n/mod.rs` | `Lang`, `Key`, `Strings` and locale-based language selection |
 | `src/i18n/<lang>.rs` | Translation tables (`ENTRIES`) |
-| `src/settings.rs` | Selected-language persistence in `settings.json` |
+| `src/settings.rs` | Language, Rescue baseline and armed flag in `settings.json` |
 | `src/topology.rs` | Desktop display scan (KScreen/XRandR) and monitor-link inference |
 | `src/panel.rs` | Panel aspect detection from model, EDID, desktop mode or fallback |
 | `src/worker.rs` | Worker thread, commands, events and read retries |
 | `src/profiles.rs` | Profile JSON persistence and configuration directory |
 | `src/ui/mod.rs` | Application state (`App`), update loop, shortcuts and worker communication |
 | `src/ui/theme.rs` | Palette, styling and navigation icons |
-| `src/ui/widgets.rs` | Cards, chips, segmented controls and layout tiles |
+| `src/ui/widgets.rs` | Cards, chips, segmented controls, True Split and PIP tiles |
 | `src/ui/rows.rs` | Feature rows: sliders, switches, choices and placeholders |
 | `src/ui/chrome.rs` | Top bar, sidebar, offline banner and language picker |
 | `src/ui/pages/*.rs` | One module per page |
-| `src/ui/screen.rs` | Overview monitor drawing (bezel, stand, single/PBP/PiP panes) |
+| `src/ui/screen.rs` | Overview monitor drawing (bezel, stand, single/True Split/PIP panes) |
 | `assets/icon.svg` | Vector source for the application icon |
 | `assets/icon.png` | 256×256 desktop icon |
 | `assets/icon.rgba` | Raw RGBA data embedded in the window (`include_bytes!`) |

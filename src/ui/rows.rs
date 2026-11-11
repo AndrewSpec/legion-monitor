@@ -257,12 +257,18 @@ mod tests {
             log: Vec::new(),
             started: true,
             win_sources: [0, 0],
+            pip_corner: catalog::PipCorner::default(),
+            mode_hint: None,
             displays: crate::topology::Displays::default(),
             panel: crate::panel::Panel::default(),
             self_source: None,
             settings: Settings::default(),
             lang: Lang::En,
             tr: i18n::strings(Lang::En),
+            rescue_pending: false,
+            rescue_probe: std::time::Instant::now(),
+            rescue_after: None,
+            rescue_status: None,
         };
         (app, commands)
     }
@@ -337,7 +343,13 @@ mod tests {
     fn pbp_single_switch_uses_the_detected_or_chosen_source() {
         for (second_screen, expected) in [(false, Some(0x31)), (true, None)] {
             let (mut app, commands) = app_for_test();
-            app.vals.insert(0xf2, VcpValue { value: 1, max: 1 });
+            app.vals.insert(
+                0xf2,
+                VcpValue {
+                    value: 0x0103,
+                    max: 0xffff,
+                },
+            );
             app.vals.insert(
                 0xf4,
                 VcpValue {
@@ -371,7 +383,48 @@ mod tests {
     }
 
     #[test]
-    fn mode_clicks_never_send_a_pip_guess_and_respect_busy_offline() {
+    fn pip_from_single_uses_the_displayed_input_and_does_not_close_again() {
+        let (mut app, commands) = app_for_test();
+        app.displays = crate::topology::Displays {
+            known: true,
+            second_screen: false,
+            output_size: None,
+        };
+        app.self_source = Some(0x31);
+        // The desktop is on HDMI 1 even though the saved self-source says USB-C.
+        app.vals.insert(
+            0x60,
+            VcpValue {
+                value: 0x11,
+                max: 0xffff,
+            },
+        );
+        app.vals.insert(
+            0xf4,
+            VcpValue {
+                value: 0x0200,
+                max: 0xffff,
+            },
+        );
+        app.enter_pip(catalog::PipCorner::TopRight);
+        match commands.try_recv().unwrap() {
+            Cmd::ApplyPip {
+                corner,
+                main,
+                source,
+                leave_pbp,
+            } => {
+                assert_eq!(corner, (1280, 0, 2560, 720));
+                assert_eq!(main, Some(0x11));
+                assert_eq!(source, Some(0x11));
+                assert!(!leave_pbp);
+            }
+            other => panic!("unexpected command: {:?}", std::mem::discriminant(&other)),
+        }
+    }
+
+    #[test]
+    fn mode_clicks_send_the_expected_command_and_respect_busy_offline() {
         for (busy, connected) in [(false, true), (true, true), (false, false)] {
             for target in 0..3 {
                 let (mut app, commands) = app_for_test();
@@ -423,7 +476,7 @@ mod tests {
                         modifiers: egui::Modifiers::NONE,
                     }],
                 );
-                if busy || !connected || target == 1 {
+                if busy || !connected {
                     assert!(commands.try_recv().is_err());
                     assert_eq!(app.busy, busy);
                 } else {
@@ -431,6 +484,27 @@ mod tests {
                         (0, Cmd::DisableMultiView { source, pbp }) => {
                             assert_eq!(source, Some(0x31));
                             assert!(!pbp);
+                        }
+                        (
+                            1,
+                            Cmd::ApplyPip {
+                                corner,
+                                main,
+                                source,
+                                leave_pbp,
+                            },
+                        ) => {
+                            assert_eq!(corner, (1280, 0, 2560, 720));
+                            assert_eq!(main, Some(0x31));
+                            // No second source was picked, so PIP mirrors the
+                            // current picture until the user chooses one; the
+                            // old default picked an unconnected DisplayPort.
+                            assert_eq!(source, Some(0x31));
+                            // No F2/F4 readback in this fixture: the mode is
+                            // unknown, so the worker verifies that PBP closed
+                            // before writing the PIP selector.
+                            assert!(leave_pbp);
+                            assert_eq!(app.multi_mode(), MultiMode::PictureInPicture);
                         }
                         (2, Cmd::SetPbp { layout }) => {
                             assert_eq!(layout, Some(0x0101));
@@ -495,6 +569,132 @@ mod tests {
 
         assert!(commands.try_recv().is_err(), "the split must stay on");
         assert!(app.toast.is_some(), "the user must be told why");
+    }
+
+    /// The primary window of 0x60 is the low byte. Using the high byte put
+    /// HDMI in the main picture and left USB-C in the PIP quarter.
+    #[test]
+    fn pip_uses_the_low_byte_of_a_pair_as_the_main_picture() {
+        let (mut app, commands) = app_for_test();
+        app.self_source = Some(0x11);
+        app.vals.insert(
+            0x60,
+            VcpValue {
+                value: 0x1131,
+                max: 0xffff,
+            },
+        );
+        app.vals.insert(
+            0xf4,
+            VcpValue {
+                value: 0x0201,
+                max: 0xffff,
+            },
+        );
+        app.enter_pip_with(catalog::PipCorner::TopRight, Some(0x12));
+        match commands.try_recv().expect("PIP command") {
+            Cmd::ApplyPip {
+                main,
+                source,
+                leave_pbp,
+                ..
+            } => {
+                assert_eq!(main, Some(0x31));
+                assert_eq!(source, Some(0x12));
+                assert!(leave_pbp, "F4 reports an open split");
+            }
+            _ => panic!("expected ApplyPip"),
+        }
+    }
+
+    #[test]
+    fn true_split_50_50_is_not_reported_as_pip() {
+        let (mut app, _commands) = app_for_test();
+        for (code, value) in [
+            (0x60, 0x0031),
+            (0xf2, 0x0103),
+            (0xf4, 0x0201),
+            (0xf5, 0x0402),
+            (0x95, 2560),
+            (0x96, 0),
+            (0x97, 5120),
+            (0x98, 720),
+        ] {
+            app.vals.insert(
+                code,
+                VcpValue {
+                    value,
+                    max: u16::MAX,
+                },
+            );
+        }
+        assert_eq!(app.multi_mode(), MultiMode::PictureByPicture);
+    }
+
+    #[test]
+    fn pip_reports_one_in_f2_low_byte() {
+        let (mut app, _commands) = app_for_test();
+        for (code, value) in [(0x60, 0x0031), (0xf2, 0x0101), (0xf4, 0x0201)] {
+            app.vals.insert(
+                code,
+                VcpValue {
+                    value,
+                    max: u16::MAX,
+                },
+            );
+        }
+        assert_eq!(app.multi_mode(), MultiMode::PictureInPicture);
+    }
+
+    #[test]
+    fn rescue_baseline_refuses_a_split() {
+        let (mut app, _commands) = app_for_test();
+        app.vals.insert(
+            0x60,
+            VcpValue {
+                value: 0x1131,
+                max: 0xffff,
+            },
+        );
+        app.vals.insert(
+            0xf4,
+            VcpValue {
+                value: 0x0201,
+                max: 0xffff,
+            },
+        );
+        app.save_rescue_baseline(true);
+        assert!(
+            app.settings.rescue.is_none(),
+            "a split is not a rescue base"
+        );
+        assert_eq!(app.rescue_status, Some((Key::RescueNeedSingle, true)));
+    }
+
+    #[test]
+    fn rescue_restore_sends_the_saved_source() {
+        let (mut app, commands) = app_for_test();
+        app.settings.rescue = Some(crate::settings::RescueBase {
+            source: 0x31,
+            f2: 0x0100,
+            f5: 0x0402,
+            brightness: Some(80),
+            contrast: Some(60),
+            saved_at: 1,
+        });
+        app.restore_rescue();
+        match commands.try_recv().expect("rescue command") {
+            Cmd::Rescue {
+                source,
+                brightness,
+                contrast,
+            } => {
+                assert_eq!(source, 0x31);
+                assert_eq!(brightness, Some(80));
+                assert_eq!(contrast, Some(60));
+            }
+            _ => panic!("expected Rescue"),
+        }
     }
 
     #[test]

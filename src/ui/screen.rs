@@ -6,13 +6,12 @@ use crate::panel::{Panel, PanelSource};
 use crate::ui::*;
 
 /// Left window's share of the width and whether the monitor confirms that
-/// geometry. Only the two layouts verified on the R45w-30 claim a real split;
-/// every other code is drawn as an even, explicitly approximate split.
-fn split_share(layout: Option<u16>) -> (f32, bool) {
-    match layout {
-        Some(0x0101) => (0.5, true),
-        Some(0x0401) => (0.75, true),
-        _ => (0.5, false),
+/// geometry. Only the two True Split layouts the R45w-30 applies are real;
+/// any other F5 value is drawn as an even, explicitly approximate split.
+fn true_split_share(layout: Option<u16>) -> (f32, bool) {
+    match layout.and_then(catalog::true_split_for) {
+        Some(split) => (split.share(), true),
+        None => (0.5, false),
     }
 }
 
@@ -23,6 +22,10 @@ struct Scene {
     single: Option<u16>,
     self_source: Option<u16>,
     share: f32,
+    /// Corner and rectangle of the PIP window. The rectangle comes from the
+    /// monitor when it reports 0x95..0x98, otherwise the stored corner wins.
+    pip_corner: catalog::PipCorner,
+    pip_rect: Option<[f32; 4]>,
     connected: bool,
 }
 
@@ -37,7 +40,7 @@ impl App {
         );
         let pair = self.split_pair().filter(|_| split);
         let single = self.value(0x60).filter(|value| *value <= 0xff);
-        let (share, exact) = split_share(self.value(0xf5));
+        let (share, exact) = true_split_share(self.value(0xf5));
         let connected = matches!(self.conn, Conn::Ok(_));
         let scene = Scene {
             mode,
@@ -45,6 +48,8 @@ impl App {
             single,
             self_source: self.self_source.filter(|_| split),
             share,
+            pip_corner: self.pip_corner_from_registers(),
+            pip_rect: self.pip_rect_from_registers(),
             connected,
         };
 
@@ -77,7 +82,9 @@ impl App {
 
             self.monitor_scene(ui, panel, scene);
 
-            if split && !exact {
+            // Only a True Split can be an approximate reading of F5. PIP's
+            // rectangle is known even when the source register is not.
+            if mode == MultiMode::PictureByPicture && !exact {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(self.t(Key::ScreenApproxSplit))
@@ -85,7 +92,11 @@ impl App {
                         .color(WARN),
                 );
             }
-            if split && pair.is_none() {
+            if mode == MultiMode::PictureByPicture
+                && pair.is_none()
+                && single.is_none()
+                && self.self_source.is_none()
+            {
                 ui.add_space(6.0);
                 ui.label(
                     RichText::new(self.t(Key::WindowsUnknown))
@@ -203,10 +214,19 @@ impl App {
                     scene.single,
                     false,
                     Some(self.t(Key::ScreenFull)),
+                    None,
                 );
             }
-            MultiMode::PictureByPicture => match scene.pair {
-                Some((left, right)) => {
+            MultiMode::PictureByPicture => {
+                // True Split can expose only the left source in 0x60, so a
+                // missing pair is not a reason to blank the whole drawing:
+                // show the half we do know and leave the other marked unknown.
+                let (left, right) = scene
+                    .pair
+                    .unwrap_or_else(|| (scene.self_source.or(scene.single).unwrap_or(0), 0));
+                if left == 0 && right == 0 {
+                    self.draw_unknown(&painter, inner, unknown_note);
+                } else {
                     let gap = 4.0;
                     let divider = inner.left() + inner.width() * scene.share;
                     let left_rect = Rect::from_min_max(
@@ -218,16 +238,18 @@ impl App {
                     self.draw_pane(
                         &painter,
                         left_rect,
-                        Some(left),
+                        (left != 0).then_some(left),
                         scene.self_source == Some(left),
                         Some(self.t(Key::WindowLeft)),
+                        None,
                     );
                     self.draw_pane(
                         &painter,
                         right_rect,
-                        Some(right),
+                        (right != 0).then_some(right),
                         scene.self_source == Some(right),
                         Some(self.t(Key::WindowRight)),
+                        None,
                     );
                     painter.line_segment(
                         [
@@ -237,36 +259,66 @@ impl App {
                         Stroke::new(1.0_f32, BORDER),
                     );
                 }
-                None => self.draw_unknown(&painter, inner, unknown_note),
-            },
-            MultiMode::PictureInPicture => match scene.pair {
-                Some((main, pip)) => {
-                    self.draw_pane(&painter, inner, Some(main), false, None);
-                    let inset_width = (inner.width() * 0.32).clamp(110.0, 260.0);
-                    let inset_height = inset_width * 9.0 / 16.0;
-                    let inset = Rect::from_min_size(
-                        Pos2::new(inner.right() - inset_width - 12.0, inner.top() + 12.0),
-                        Vec2::new(inset_width, inset_height),
-                    );
-                    painter.rect_filled(
-                        inset.expand(2.0),
-                        CornerRadius::same(7),
-                        Color32::from_rgb(0x05, 0x07, 0x0a),
-                    );
-                    self.draw_pane(
-                        &painter,
-                        inset,
-                        Some(pip),
-                        scene.self_source == Some(pip),
-                        Some(self.t(Key::ModePip)),
-                    );
-                }
-                None => self.draw_unknown(&painter, inner, unknown_note),
-            },
+            }
+            MultiMode::PictureInPicture => {
+                // The main picture is this computer's input when the monitor
+                // does not report a pair; the floating window is the second
+                // source. A missing PIP source still leaves a usable main
+                // picture and the picker below the drawing.
+                let main = scene
+                    .pair
+                    .map(|pair| pair.0)
+                    .or(scene.self_source)
+                    .or(scene.single);
+                let pip = scene
+                    .pair
+                    .map(|pair| pair.1)
+                    .or_else(|| Some(self.win_sources[1]).filter(|code| *code != 0));
+                // Keep the name clear of the floating window: the left half
+                // is the part of the main picture that stays visible.
+                self.draw_pane(
+                    &painter,
+                    inner,
+                    main,
+                    scene.self_source.is_some() && scene.self_source == main,
+                    None,
+                    Some(Pos2::new(
+                        inner.left() + inner.width() * 0.25,
+                        inner.center().y,
+                    )),
+                );
+                let [left, top, right, bottom] =
+                    scene.pip_rect.unwrap_or(scene.pip_corner.fractions());
+                let inset = Rect::from_min_max(
+                    Pos2::new(
+                        inner.left() + inner.width() * left,
+                        inner.top() + inner.height() * top,
+                    ),
+                    Pos2::new(
+                        inner.left() + inner.width() * right,
+                        inner.top() + inner.height() * bottom,
+                    ),
+                )
+                .shrink(1.0);
+                painter.rect_filled(
+                    inset.expand(2.0),
+                    CornerRadius::same(7),
+                    Color32::from_rgb(0x05, 0x07, 0x0a),
+                );
+                self.draw_pane(
+                    &painter,
+                    inset,
+                    pip,
+                    false,
+                    Some(self.t(Key::ModePip)),
+                    None,
+                );
+            }
             MultiMode::Unknown => self.draw_unknown(&painter, inner, unknown_note),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn draw_pane(
         &self,
         painter: &egui::Painter,
@@ -274,6 +326,7 @@ impl App {
         source: Option<u16>,
         self_here: bool,
         sublabel: Option<&str>,
+        label_center: Option<Pos2>,
     ) {
         let p = painter.with_clip_rect(rect);
         let background = if self_here {
@@ -291,6 +344,7 @@ impl App {
             );
         }
 
+        let center = label_center.unwrap_or(rect.center());
         if let Some(code) = source {
             let name = self.input_name_of(code);
             let name_size = if rect.width() < 150.0 || rect.height() < 90.0 {
@@ -305,15 +359,15 @@ impl App {
                 (rect.width() - 24.0).max(40.0),
             );
             let sub_height = if sublabel.is_some() { 18.0 } else { 0.0 };
-            let top = rect.center().y - (name_galley.size().y + sub_height) / 2.0;
+            let top = center.y - (name_galley.size().y + sub_height) / 2.0;
             p.galley(
-                Pos2::new(rect.center().x - name_galley.size().x / 2.0, top),
+                Pos2::new(center.x - name_galley.size().x / 2.0, top),
                 name_galley.clone(),
                 TEXT,
             );
             if let Some(sub) = sublabel {
                 p.text(
-                    Pos2::new(rect.center().x, top + name_galley.size().y + 4.0),
+                    Pos2::new(center.x, top + name_galley.size().y + 4.0),
                     Align2::CENTER_TOP,
                     sub,
                     FontId::proportional(10.5),
@@ -322,7 +376,7 @@ impl App {
             }
         } else {
             p.text(
-                rect.center(),
+                center,
                 Align2::CENTER_CENTER,
                 "—",
                 FontId::proportional(20.0),
@@ -377,15 +431,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verified_layouts_have_their_shares() {
-        assert_eq!(split_share(Some(0x0101)), (0.5, true));
-        assert_eq!(split_share(Some(0x0401)), (0.75, true));
+    fn true_split_layouts_have_their_shares() {
+        assert_eq!(true_split_share(Some(0x0101)), (0.5, true));
+        assert_eq!(true_split_share(Some(0x0401)), (0.70, true));
     }
 
     #[test]
     fn unknown_layouts_are_drawn_even_and_flagged() {
-        assert_eq!(split_share(None), (0.5, false));
-        assert_eq!(split_share(Some(0x0201)), (0.5, false));
-        assert_eq!(split_share(Some(0x0302)), (0.5, false));
+        assert_eq!(true_split_share(None), (0.5, false));
+        assert_eq!(true_split_share(Some(0x0201)), (0.5, false));
+        assert_eq!(true_split_share(Some(0x0302)), (0.5, false));
     }
 }

@@ -12,17 +12,19 @@ pub enum Section {
     Inputs,
     MultiView,
     Profiles,
+    Rescue,
     Advanced,
 }
 
 impl Section {
-    pub const ALL: [Section; 6] = [
+    pub const ALL: [Section; 7] = [
         Section::Overview,
         Section::Image,
         Section::Color,
         Section::Inputs,
         Section::MultiView,
         Section::Profiles,
+        Section::Rescue,
     ];
 
     /// Maps a command-line page name (`--page multi-view`) to a section.
@@ -34,6 +36,7 @@ impl Section {
             "inputs" | "zrodla" => Some(Section::Inputs),
             "multi-view" | "multiview" | "pip" | "pbp" => Some(Section::MultiView),
             "profiles" | "profile" => Some(Section::Profiles),
+            "rescue" | "ratunek" => Some(Section::Rescue),
             "advanced" | "zaawansowane" => Some(Section::Advanced),
             _ => None,
         }
@@ -300,25 +303,156 @@ pub fn power_modes() -> &'static [(u16, Key)] {
     ]
 }
 
-/// Experimental F5 candidates. Numeric codes do not establish geometry.
-#[derive(Clone, Copy, Debug)]
-pub struct Layout {
-    pub value: u16,
+/// The two True Split layouts the R45w-30 actually applies.
+///
+/// The OSD offers 50/50 and "about 70/30"; F5 uses `0x0101` and `0x0401`.
+/// Other codes from the protocol notes are accepted or rejected by the
+/// monitor without changing the picture, so they are not offered.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TrueSplit {
+    Half,
+    Wide,
 }
 
-pub const LAYOUTS: &[Layout] = &[
-    Layout { value: 0x0101 },
-    Layout { value: 0x0102 },
-    Layout { value: 0x0201 },
-    Layout { value: 0x0202 },
-    Layout { value: 0x0301 },
-    Layout { value: 0x0302 },
-    Layout { value: 0x0401 },
-    Layout { value: 0x0402 },
-];
+impl TrueSplit {
+    pub const ALL: [TrueSplit; 2] = [TrueSplit::Half, TrueSplit::Wide];
 
-pub fn layout_for(value: u16) -> Option<&'static Layout> {
-    LAYOUTS.iter().find(|l| l.value == value)
+    /// F5 value that selects the layout.
+    pub fn value(self) -> u16 {
+        match self {
+            TrueSplit::Half => 0x0101,
+            TrueSplit::Wide => 0x0401,
+        }
+    }
+
+    /// Left window's share of the width, used by the drawing. The register
+    /// asks for 3:1, but the OSD calls the layout 70/30 and that is how the
+    /// picture reads, so the preview follows the label.
+    pub fn share(self) -> f32 {
+        match self {
+            TrueSplit::Half => 0.5,
+            TrueSplit::Wide => 0.70,
+        }
+    }
+
+    /// Label of the layout, for example `50 / 50`.
+    pub fn key(self) -> Key {
+        match self {
+            TrueSplit::Half => Key::Split5050,
+            TrueSplit::Wide => Key::Split7030,
+        }
+    }
+}
+
+/// Decodes the F5 register into a layout the monitor supports.
+pub fn true_split_for(value: u16) -> Option<TrueSplit> {
+    TrueSplit::ALL
+        .into_iter()
+        .find(|layout| layout.value() == value)
+}
+
+/// Corner of the PIP window. The monitor's OSD offers exactly these four.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PipCorner {
+    TopLeft,
+    #[default]
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl PipCorner {
+    pub const ALL: [PipCorner; 4] = [
+        PipCorner::TopLeft,
+        PipCorner::TopRight,
+        PipCorner::BottomLeft,
+        PipCorner::BottomRight,
+    ];
+
+    /// VCP 0x95..0x98 rectangle, in panel pixels.
+    ///
+    /// The monitor reports these registers in pixels (0x95 max 4960, 0x96 max
+    /// 1320 on the R45w-30), not in percentages. Writing 0..100 produced a
+    /// 100-pixel window in the top-left corner and was the PIP bug.
+    pub fn rect(self, width: u32, height: u32) -> (u16, u16, u16, u16) {
+        let width = width.clamp(2, u16::MAX as u32) as u16;
+        let height = height.clamp(2, u16::MAX as u32) as u16;
+        let half_width = width / 2;
+        let half_height = height / 2;
+        match self {
+            PipCorner::TopLeft => (0, 0, half_width, half_height),
+            PipCorner::TopRight => (half_width, 0, width, half_height),
+            PipCorner::BottomLeft => (0, half_height, half_width, height),
+            PipCorner::BottomRight => (half_width, half_height, width, height),
+        }
+    }
+
+    /// The same rectangle as fractions of the screen, for the drawing.
+    pub fn fractions(self) -> [f32; 4] {
+        match self {
+            PipCorner::TopLeft => [0.0, 0.0, 0.5, 0.5],
+            PipCorner::TopRight => [0.5, 0.0, 1.0, 0.5],
+            PipCorner::BottomLeft => [0.0, 0.5, 0.5, 1.0],
+            PipCorner::BottomRight => [0.5, 0.5, 1.0, 1.0],
+        }
+    }
+
+    /// Recovers the corner from a rectangle reported by the monitor.
+    /// Returns `None` for an empty, inverted or out-of-range rectangle.
+    pub fn from_pixels(
+        left: u16,
+        top: u16,
+        right: u16,
+        bottom: u16,
+        width: u32,
+        height: u32,
+    ) -> Option<Self> {
+        if width == 0
+            || height == 0
+            || left >= right
+            || top >= bottom
+            || right as u32 > width
+            || bottom as u32 > height
+        {
+            return None;
+        }
+        Self::from_fractions([
+            left as f32 / width as f32,
+            top as f32 / height as f32,
+            right as f32 / width as f32,
+            bottom as f32 / height as f32,
+        ])
+    }
+
+    /// Recovers the corner from a 0..1 rectangle.
+    pub fn from_fractions([left, top, right, bottom]: [f32; 4]) -> Option<Self> {
+        if !(0.0..=1.0).contains(&left)
+            || !(0.0..=1.0).contains(&top)
+            || !(0.0..=1.0).contains(&right)
+            || !(0.0..=1.0).contains(&bottom)
+            || left >= right
+            || top >= bottom
+        {
+            return None;
+        }
+        let horizontal_left = (left + right) / 2.0 < 0.5;
+        let vertical_top = (top + bottom) / 2.0 < 0.5;
+        Some(match (horizontal_left, vertical_top) {
+            (true, true) => PipCorner::TopLeft,
+            (false, true) => PipCorner::TopRight,
+            (true, false) => PipCorner::BottomLeft,
+            (false, false) => PipCorner::BottomRight,
+        })
+    }
+
+    pub fn key(self) -> Key {
+        match self {
+            PipCorner::TopLeft => Key::PipCornerTopLeft,
+            PipCorner::TopRight => Key::PipCornerTopRight,
+            PipCorner::BottomLeft => Key::PipCornerBottomLeft,
+            PipCorner::BottomRight => Key::PipCornerBottomRight,
+        }
+    }
 }
 
 /// Multi-view mode derived from F2 + F4.
@@ -448,5 +582,40 @@ mod tests {
         assert_eq!(window_sources(Some(0)), None);
         assert_eq!(window_pair(0x11, 0x31), 0x3111);
         assert_eq!(window_pair(0x31, 0x12), 0x1231);
+    }
+
+    #[test]
+    fn true_split_decodes_only_the_supported_codes() {
+        assert_eq!(true_split_for(0x0101), Some(TrueSplit::Half));
+        assert_eq!(true_split_for(0x0401), Some(TrueSplit::Wide));
+        assert_eq!(TrueSplit::Half.share(), 0.5);
+        assert_eq!(TrueSplit::Wide.share(), 0.70);
+        for code in [0, 0x0102, 0x0201, 0x0202, 0x0301, 0x0302, 0x0402, 0x00ff] {
+            assert_eq!(true_split_for(code), None, "{code:04X}");
+        }
+    }
+
+    #[test]
+    fn pip_corners_are_quarter_pixel_rectangles() {
+        assert_eq!(PipCorner::TopLeft.rect(5120, 1440), (0, 0, 2560, 720));
+        assert_eq!(PipCorner::TopRight.rect(5120, 1440), (2560, 0, 5120, 720));
+        assert_eq!(PipCorner::BottomLeft.rect(5120, 1440), (0, 720, 2560, 1440));
+        assert_eq!(
+            PipCorner::BottomRight.rect(5120, 1440),
+            (2560, 720, 5120, 1440)
+        );
+        for corner in PipCorner::ALL {
+            let (left, top, right, bottom) = corner.rect(5120, 1440);
+            assert_eq!(
+                PipCorner::from_pixels(left, top, right, bottom, 5120, 1440),
+                Some(corner)
+            );
+        }
+        assert_eq!(PipCorner::from_pixels(50, 50, 50, 50, 5120, 1440), None);
+        assert_eq!(PipCorner::from_pixels(0, 0, 6000, 50, 5120, 1440), None);
+        assert_eq!(
+            PipCorner::from_fractions([0.5, 0.5, 1.0, 1.0]),
+            Some(PipCorner::BottomRight)
+        );
     }
 }

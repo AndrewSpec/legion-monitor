@@ -42,6 +42,20 @@ pub enum Cmd {
     SetPbp {
         layout: Option<u16>,
     },
+    /// Places the PIP window and stages its source.
+    ///
+    /// The monitor exposes the PIP rectangle as VCP 0x95..0x98 in panel
+    /// pixels; 0xA4 masks the window while it moves. `main` and `source` are
+    /// staged together in 0x60 before the PIP selector is written, so a
+    /// selector the monitor ignores cannot change the main picture. The UI
+    /// closes a True Split first; writing 0xA5 = 0x0100 while PBP was open
+    /// froze the monitor's OSD.
+    ApplyPip {
+        corner: (u16, u16, u16, u16),
+        main: Option<u16>,
+        source: Option<u16>,
+        leave_pbp: bool,
+    },
     /// Closes the PIP/PBP window and returns to a single picture.
     ///
     /// `source` is the monitor input this computer runs on. When it is given,
@@ -52,6 +66,13 @@ pub enum Cmd {
         /// PbP needs both halves pointed at our source before closing; in PiP
         /// only the main input matters.
         pbp: bool,
+    },
+    /// Rescue mode: restores the saved single picture even when the monitor
+    /// currently shows nothing usable.
+    Rescue {
+        source: u16,
+        brightness: Option<u16>,
+        contrast: Option<u16>,
     },
 }
 
@@ -161,6 +182,7 @@ impl Worker {
                             let Some(m) = mon.clone() else {
                                 let _ =
                                     etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
+                                let _ = etx.send(Ev::Busy(false));
                                 continue;
                             };
                             let _ = etx.send(Ev::Busy(true));
@@ -182,6 +204,7 @@ impl Worker {
                             let Some(m) = mon.clone() else {
                                 let _ =
                                     etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
+                                let _ = etx.send(Ev::Busy(false));
                                 continue;
                             };
                             let _ = etx.send(Ev::Busy(true));
@@ -209,6 +232,7 @@ impl Worker {
                             let Some(m) = mon.clone() else {
                                 let _ =
                                     etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
+                                let _ = etx.send(Ev::Busy(false));
                                 continue;
                             };
                             let _ = etx.send(Ev::Busy(true));
@@ -240,6 +264,7 @@ impl Worker {
                             let Some(m) = mon.clone() else {
                                 let _ =
                                     etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
+                                let _ = etx.send(Ev::Busy(false));
                                 continue;
                             };
                             let _ = etx.send(Ev::Busy(true));
@@ -265,6 +290,7 @@ impl Worker {
                             let Some(m) = mon.clone() else {
                                 let _ =
                                     etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
+                                let _ = etx.send(Ev::Busy(false));
                                 continue;
                             };
                             let _ = etx.send(Ev::Busy(true));
@@ -288,29 +314,247 @@ impl Worker {
                             let _ = etx.send(Ev::Busy(false));
                         }
 
-                        Cmd::DisableMultiView { source, pbp } => {
+                        Cmd::ApplyPip {
+                            corner,
+                            main,
+                            source,
+                            leave_pbp,
+                        } => {
                             let Some(m) = mon.clone() else {
                                 let _ =
                                     etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
+                                let _ = etx.send(Ev::Busy(false));
                                 continue;
                             };
                             let _ = etx.send(Ev::Busy(true));
                             let mut failure = None;
+                            let mut stopped = None;
+
+                            if leave_pbp {
+                                match main {
+                                    None => stopped = Some(Key::ErrSelfSourceUnknown),
+                                    Some(main_source) => {
+                                        for &(code, value) in &single_plan(Some(main_source), true)
+                                        {
+                                            write_log(&etx, code, value);
+                                            if let Err(e) = ddc::set(m.display, code, value) {
+                                                // The monitor answers EIO while it
+                                                // switches modes but applies the
+                                                // write; the state probe below
+                                                // decides whether it worked.
+                                                let _ = etx.send(Ev::Log(LogLine::Text(e)));
+                                            }
+                                            if code == 0xa5 {
+                                                thread::sleep(Duration::from_millis(400));
+                                            } else if code == 0x60 {
+                                                settle();
+                                            } else {
+                                                thread::sleep(Duration::from_millis(120));
+                                            }
+                                        }
+                                        settle();
+                                        thread::sleep(Duration::from_millis(300));
+                                        // 0xF4 reads 0x0201 while the PBP window
+                                        // is still open and 0x0200 after it closes.
+                                        // Retry because a read during the mode
+                                        // change can fail; refuse to write the PIP
+                                        // selector while True Split is reported.
+                                        if failure.is_none() {
+                                            let mut probe = None;
+                                            for attempt in 0..3 {
+                                                if let Some(value) = ddc::read(m.display, &[0xf4])
+                                                    .get(&0xf4)
+                                                    .map(|v| v.value)
+                                                {
+                                                    probe = Some(value);
+                                                    if value != 0x0201 {
+                                                        break;
+                                                    }
+                                                }
+                                                if attempt < 2 {
+                                                    thread::sleep(Duration::from_millis(300));
+                                                }
+                                            }
+                                            match probe {
+                                                Some(0x0201) => stopped = Some(Key::WriteMismatch),
+                                                None => stopped = Some(Key::WriteUnconfirmed),
+                                                Some(_) => {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Place the rectangle before selecting the PIP
+                            // window. The monitor accepts and reports 0x95..0x98
+                            // in single mode, so a failed selector cannot leave
+                            // a split with a zero rectangle.
+                            if failure.is_none() && stopped.is_none() {
+                                for &(code, value) in &pip_rect_plan(corner) {
+                                    write_log(&etx, code, value);
+                                    if let Err(e) = ddc::set(m.display, code, value) {
+                                        let _ = etx.send(Ev::Log(LogLine::Text(e.clone())));
+                                        failure = Some(e);
+                                        break;
+                                    }
+                                    thread::sleep(Duration::from_millis(120));
+                                }
+                            }
+
+                            // The source may only be written once the rectangle
+                            // reads back and a window is actually open. In single
+                            // mode the same write changes the main picture, which
+                            // is how the first PIP attempt went black.
+                            if failure.is_none() && stopped.is_none() {
+                                let mut rect_seen = None;
+                                for attempt in 0..3 {
+                                    let vals = ddc::read(
+                                        m.display,
+                                        &[0x95, 0x96, 0x97, 0x98],
+                                    );
+                                    let got = |code: u8| {
+                                        vals.get(&code).map(|value| value.value)
+                                    };
+                                    match (
+                                        got(0x95),
+                                        got(0x96),
+                                        got(0x97),
+                                        got(0x98),
+                                    ) {
+                                        (Some(left), Some(top), Some(right), Some(bottom))
+                                            if (left, top, right, bottom) == corner =>
+                                        {
+                                            rect_seen = Some(true);
+                                            break;
+                                        }
+                                        (Some(left), Some(top), Some(right), Some(bottom)) => {
+                                            rect_seen = Some(false);
+                                            let _ = etx.send(Ev::Log(LogLine::Text(format!(
+                                                "PIP rectangle readback {left},{top},{right},{bottom}"
+                                            ))));
+                                            break;
+                                        }
+                                        _ => {}
+                                    }
+                                    if attempt < 2 {
+                                        thread::sleep(Duration::from_millis(300));
+                                    }
+                                }
+                                match rect_seen {
+                                    Some(true) => {}
+                                    Some(false) => stopped = Some(Key::WriteMismatch),
+                                    None => stopped = Some(Key::WriteUnconfirmed),
+                                }
+                            }
+                            // Only select the PIP window after the rectangle is
+                            // already valid. A5 answers EIO even when it takes
+                            // effect, so the F4 probe below decides.
+                            if failure.is_none() && stopped.is_none() {
+                                write_log(&etx, 0xa5, 0x0100);
+                                if let Err(e) = ddc::set(m.display, 0xa5, 0x0100) {
+                                    let _ = etx.send(Ev::Log(LogLine::Text(e)));
+                                }
+                                thread::sleep(Duration::from_millis(400));
+                            }
+                            if failure.is_none() && stopped.is_none() {
+                                let mut active = None;
+                                for attempt in 0..3 {
+                                    if let Some(value) = ddc::read(m.display, &[0xf4])
+                                        .get(&0xf4)
+                                        .map(|v| v.value)
+                                    {
+                                        active = Some(value);
+                                        if value == 0x0201 {
+                                            break;
+                                        }
+                                    }
+                                    if attempt < 2 {
+                                        thread::sleep(Duration::from_millis(300));
+                                    }
+                                }
+                                match active {
+                                    Some(0x0201) => {}
+                                    Some(_) => stopped = Some(Key::WriteMismatch),
+                                    None => stopped = Some(Key::WriteUnconfirmed),
+                                }
+                            }
+                            if failure.is_none() && stopped.is_none() {
+                                if let Some(source) = source {
+                                    // The selector is already confirmed above;
+                                    // this write only changes the PIP window.
+                                    write_log(&etx, 0x60, source);
+                                    if let Err(e) = ddc::set(m.display, 0x60, source) {
+                                        let _ = etx.send(Ev::Log(LogLine::Text(e.clone())));
+                                        failure = Some(e);
+                                    }
+                                    settle();
+                                }
+                            }
+                            settle();
+                            let vals = read_codes(m.display, &caps);
+                            let (key, argument, error) = match stopped {
+                                Some(key) => (key, String::new(), true),
+                                None => pip_feedback(corner, &vals, failure),
+                            };
+                            let _ = etx.send(Ev::Notice(key, argument, error));
+                            let _ = etx.send(Ev::Values(vals));
+                            let _ = etx.send(Ev::Busy(false));
+                        }
+
+                        Cmd::Rescue {
+                            source,
+                            brightness,
+                            contrast,
+                        } => {
+                            let Some(m) = mon.clone() else {
+                                let _ =
+                                    etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
+                                let _ = etx.send(Ev::Busy(false));
+                                continue;
+                            };
+                            let _ = etx.send(Ev::Busy(true));
+                            for &(code, value) in &rescue_plan(source, brightness, contrast) {
+                                write_log(&etx, code, value);
+                                if let Err(e) = ddc::set(m.display, code, value) {
+                                    // Mode writes answer EIO while they land;
+                                    // the readback below decides the outcome.
+                                    let _ = etx.send(Ev::Log(LogLine::Text(e)));
+                                }
+                                match code {
+                                    0xa5 => thread::sleep(Duration::from_millis(400)),
+                                    0x60 => settle(),
+                                    _ => thread::sleep(Duration::from_millis(120)),
+                                }
+                            }
+                            settle();
+                            let vals = read_codes(m.display, &caps);
+                            let (key, argument, error) = single_feedback(Some(source), &vals, None);
+                            let _ = etx.send(Ev::Notice(key, argument, error));
+                            let _ = etx.send(Ev::Values(vals));
+                            let _ = etx.send(Ev::Busy(false));
+                        }
+
+                        Cmd::DisableMultiView { source, pbp } => {
+                            let Some(m) = mon.clone() else {
+                                let _ =
+                                    etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
+                                let _ = etx.send(Ev::Busy(false));
+                                continue;
+                            };
+                            let _ = etx.send(Ev::Busy(true));
                             for &(code, value) in &single_plan(source, pbp) {
                                 write_log(&etx, code, value);
                                 if let Err(e) = ddc::set(m.display, code, value) {
-                                    let _ = etx.send(Ev::Log(LogLine::Text(e.clone())));
-                                    // A failed 0x60 write is only a warning:
-                                    // the readback below decides whether the
-                                    // desktop is on our source.
-                                    if code == 0xa5 {
-                                        failure = Some(e);
-                                    }
+                                    // A5 and 0x60 both answer EIO during a mode
+                                    // change even when they land; the readback
+                                    // below decides whether the desktop is on
+                                    // our source.
+                                    let _ = etx.send(Ev::Log(LogLine::Text(e)));
                                 }
                                 settle();
                             }
                             let vals = read_codes(m.display, &caps);
-                            let (key, argument, error) = single_feedback(source, &vals, failure);
+                            let (key, argument, error) = single_feedback(source, &vals, None);
                             let _ = etx.send(Ev::Notice(key, argument, error));
                             let _ = etx.send(Ev::Values(vals));
                             let _ = etx.send(Ev::Busy(false));
@@ -361,6 +605,55 @@ fn single_plan(source: Option<u16>, pbp: bool) -> Vec<(u8, u16)> {
         ],
         (Some(source), false) => vec![(0xa5, 0), (0x60, source)],
         (None, _) => vec![(0xa5, 0)],
+    }
+}
+
+/// Restores the saved picture and, when the monitor exposes them, the saved
+/// brightness and contrast. The single-picture writes come first so the
+/// picture is usable even if one of the picture settings fails.
+fn rescue_plan(source: u16, brightness: Option<u16>, contrast: Option<u16>) -> Vec<(u8, u16)> {
+    let mut plan = single_plan(Some(source), true);
+    if let Some(value) = brightness {
+        plan.push((0x10, value));
+    }
+    if let Some(value) = contrast {
+        plan.push((0x12, value));
+    }
+    plan
+}
+
+/// Writes that enter PIP and place its window.
+///
+/// The rectangle is 0x95 left, 0x96 top, 0x97 right, 0x98 bottom in panel
+/// pixels. 0xA4 is deliberately not written: the monitor rejects the show
+/// value in this path and can leave the whole picture masked. The input source
+/// is not part of this plan either; the command arm writes it only after the
+/// rectangle reads back and 0xF4 reports an open window.
+fn pip_rect_plan(corner: (u16, u16, u16, u16)) -> Vec<(u8, u16)> {
+    let (left, top, right, bottom) = corner;
+    vec![(0x95, left), (0x96, top), (0x97, right), (0x98, bottom)]
+}
+
+/// Checks the PIP rectangle back. 0xA5 and 0xA4 are not readable state
+/// (they read as zero), so the geometry is the only useful confirmation.
+fn pip_feedback(
+    corner: (u16, u16, u16, u16),
+    observed: &BTreeMap<u8, VcpValue>,
+    failure: Option<String>,
+) -> (Key, String, bool) {
+    if let Some(error) = failure {
+        return (Key::WriteFailed, error, true);
+    }
+    let read = |code: u8| observed.get(&code).map(|value| value.value);
+    match (read(0x95), read(0x96), read(0x97), read(0x98)) {
+        (Some(left), Some(top), Some(right), Some(bottom)) => {
+            if (left, top, right, bottom) == corner {
+                (Key::WriteConfirmed, "1".to_string(), false)
+            } else {
+                (Key::WriteMismatch, "1".to_string(), true)
+            }
+        }
+        _ => (Key::WriteUnconfirmed, String::new(), true),
     }
 }
 
@@ -487,7 +780,7 @@ fn codes_to_read(caps: &Capabilities) -> Vec<u8> {
     }
     // Layout F5 and window sources F0 are sometimes missing from capabilities.
     for extra in [
-        0x87u8, 0x8a, 0x8b, 0x72, 0x6d, 0x0c, 0x14, 0x62, 0x8d, 0xd6, 0xcc,
+        0x87u8, 0x8a, 0x8b, 0x72, 0x6d, 0x0c, 0x14, 0x62, 0x8d, 0xd6, 0xcc, 0x95, 0x96, 0x97, 0x98,
     ] {
         if !codes.contains(&extra) {
             codes.push(extra);
@@ -522,6 +815,34 @@ mod tests {
         assert_eq!(codes.len(), 256);
         assert!(codes.contains(&0xfd));
         assert!(codes_to_read(&Capabilities::default()).contains(&0xf5));
+    }
+
+    #[test]
+    fn rescue_without_monitor_releases_busy() {
+        let worker = Worker::spawn();
+        worker
+            .tx
+            .send(Cmd::Rescue {
+                source: 0x31,
+                brightness: Some(80),
+                contrast: Some(60),
+            })
+            .expect("queue rescue");
+        let mut noticed = false;
+        let mut released = false;
+        for _ in 0..10 {
+            match worker.rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(Ev::Notice(Key::ErrNotConnected, _, _)) => noticed = true,
+                Ok(Ev::Busy(false)) => released = true,
+                Ok(_) => {}
+                Err(_) => break,
+            }
+            if noticed && released {
+                break;
+            }
+        }
+        assert!(noticed, "the missing monitor is reported");
+        assert!(released, "busy must not stay latched after a no-op command");
     }
 
     /// Explicit opt-in: reversible attached-monitor acceptance for the real worker.
@@ -642,6 +963,47 @@ mod tests {
         let mut wrong = BTreeMap::new();
         wrong.insert(0x60, value(0x1211));
         assert!(split_feedback(0x11, 0x31, &wrong, None).2);
+    }
+
+    #[test]
+    fn pip_rect_is_placed_before_the_window_is_selected() {
+        // The rectangle is written while the monitor is still single, then
+        // 0xA5 selects the PIP window. The input source is written only after
+        // the rectangle and 0xF4 confirm the window.
+        assert_eq!(
+            pip_rect_plan((2560, 0, 5120, 720)),
+            vec![(0x95, 2560), (0x96, 0), (0x97, 5120), (0x98, 720),]
+        );
+    }
+
+    #[test]
+    fn pip_feedback_checks_the_reported_rectangle() {
+        let value = |v: u16| VcpValue {
+            value: v,
+            max: 5120,
+        };
+        let mut observed = BTreeMap::new();
+        for (code, v) in [(0x95, 2560), (0x96, 0), (0x97, 5120), (0x98, 720)] {
+            observed.insert(code, value(v));
+        }
+        assert!(!pip_feedback((2560, 0, 5120, 720), &observed, None).2);
+        assert!(pip_feedback((0, 0, 2560, 720), &observed, None).2);
+        assert!(pip_feedback((2560, 0, 5120, 720), &BTreeMap::new(), None).2);
+    }
+
+    #[test]
+    fn rescue_plan_closes_the_split_before_picture_settings() {
+        let plan = rescue_plan(0x31, Some(80), Some(60));
+        assert_eq!(
+            plan,
+            vec![
+                (0x60, 0x3131),
+                (0xa5, 0),
+                (0x60, 0x31),
+                (0x10, 80),
+                (0x12, 60),
+            ]
+        );
     }
 
     #[test]

@@ -57,6 +57,20 @@ impl Panel {
     pub fn aspect_label(&self) -> String {
         aspect_label(self.ratio)
     }
+
+    /// Picture size in pixels, used for the monitor's PIP rectangle.
+    ///
+    /// The rectangle registers 0x95..0x98 take pixels, not percentages. When
+    /// only the ratio is known, 1440 lines is a safe assumption; the monitor
+    /// clamps the rectangle to its real panel.
+    pub fn pixel_size(&self) -> (u32, u32) {
+        if let Some((width, height)) = self.native {
+            return (width, height);
+        }
+        let height = 1440u32;
+        let width = (height as f32 * self.ratio).round().max(1.0) as u32;
+        (width, height)
+    }
 }
 
 /// Panels this application knows by model name, independent of the mode the
@@ -248,5 +262,12 @@ mod tests {
     fn unusual_ratio_gets_a_numeric_label() {
         let panel = Panel::from_native(2560, 1600, PanelSource::Desktop);
         assert_eq!(panel.aspect_label(), "1.60:1");
+    }
+
+    #[test]
+    fn pixel_size_is_known_for_the_supported_panels() {
+        assert_eq!(detect("", "R45w-30", None).pixel_size(), (5120, 1440));
+        assert_eq!(detect("", "R34w-30", None).pixel_size(), (3440, 1440));
+        assert_eq!(Panel::default().pixel_size(), (2560, 1440));
     }
 }

@@ -73,35 +73,6 @@ impl App {
         });
     }
 
-    pub(crate) fn window_sources_block(&mut self, ui: &mut Ui) {
-        // Register F0 is unstable and can be non-zero even with multi-view off,
-        // so windows are shown only when a split is actually active.
-        let split = matches!(
-            self.multi_mode(),
-            MultiMode::PictureInPicture | MultiMode::PictureByPicture
-        );
-        match self.split_pair().filter(|_| split) {
-            Some((left, right)) => {
-                ui.horizontal(|ui| {
-                    stat(ui, self.t(Key::WindowLeft), &self.input_name_of(left));
-                    ui.add_space(24.0);
-                    stat(ui, self.t(Key::WindowRight), &self.input_name_of(right));
-                });
-            }
-            None => {
-                ui.label(
-                    RichText::new(self.t(if self.multi_mode() == MultiMode::Off {
-                        Key::NoSplit
-                    } else {
-                        Key::WindowsUnknown
-                    }))
-                    .size(12.5)
-                    .color(DIM),
-                );
-            }
-        }
-    }
-
     pub(crate) fn mode_selector(&mut self, ui: &mut Ui) {
         let current = match self.multi_mode() {
             MultiMode::Off => 0,
@@ -111,7 +82,7 @@ impl App {
         };
         let items = [
             (self.t(Key::ModeSingle), true),
-            (self.t(Key::ModePip), false),
+            (self.t(Key::ModePip), true),
             (self.t(Key::ModePbp), true),
         ];
         let selected = ui
@@ -137,22 +108,32 @@ impl App {
                         ));
                     } else {
                         let pbp = self.multi_mode() == MultiMode::PictureByPicture;
+                        self.mode_hint = Some(MultiMode::Off);
                         self.send(Cmd::DisableMultiView { source, pbp });
                     }
+                }
+                1 => {
+                    // PIP is placed with the monitor's window rectangle, not
+                    // with F5. The worker leaves True Split first and checks
+                    // that it closed before writing the PIP selector.
+                    let corner = self.pip_corner_from_registers();
+                    self.enter_pip(corner);
                 }
                 2 => {
                     let layout = self
                         .value(0xf5)
-                        .filter(|v| catalog::layout_for(*v).is_some())
-                        .unwrap_or(0x0101);
+                        .and_then(catalog::true_split_for)
+                        .map(catalog::TrueSplit::value)
+                        .unwrap_or(catalog::TrueSplit::Half.value());
                     // The old pair may belong to PIP or to a previous split;
                     // the readback after SetPbp fills in the real one.
                     self.win_sources = [0, 0];
+                    self.mode_hint = Some(MultiMode::PictureByPicture);
                     self.send(Cmd::SetPbp {
                         layout: Some(layout),
                     });
                 }
-                _ => {} // No established command for selecting PiP.
+                _ => {}
             }
         }
         if matches!(

@@ -58,6 +58,7 @@ pub(crate) fn section_title(t: &Strings, section: Section) -> &'static str {
         Section::Inputs => Key::NavInputs,
         Section::MultiView => Key::NavMultiView,
         Section::Profiles => Key::NavProfiles,
+        Section::Rescue => Key::NavRescue,
         Section::Advanced => Key::NavAdvanced,
     })
 }
@@ -146,6 +147,36 @@ pub(crate) fn draw_icon(p: &egui::Painter, center: Pos2, r: f32, section: Sectio
                 color.gamma_multiply(0.55),
                 stroke,
             ));
+        }
+        Section::Rescue => {
+            // A shield with a check mark: the state is held safe.
+            let w = r * 0.78;
+            let pts = vec![
+                center + Vec2::new(-w, -r * 0.72),
+                center + Vec2::new(w, -r * 0.72),
+                center + Vec2::new(w * 0.86, r * 0.18),
+                center + Vec2::new(0.0, r * 0.82),
+                center + Vec2::new(-w * 0.86, r * 0.18),
+            ];
+            p.add(egui::Shape::convex_polygon(
+                pts,
+                color.gamma_multiply(0.35),
+                stroke,
+            ));
+            p.line_segment(
+                [
+                    center + Vec2::new(-r * 0.3, 0.0),
+                    center + Vec2::new(-r * 0.06, r * 0.25),
+                ],
+                stroke,
+            );
+            p.line_segment(
+                [
+                    center + Vec2::new(-r * 0.06, r * 0.25),
+                    center + Vec2::new(r * 0.34, -r * 0.24),
+                ],
+                stroke,
+            );
         }
         Section::Advanced => {
             for (i, dy) in [-0.5_f32, 0.5].iter().enumerate() {

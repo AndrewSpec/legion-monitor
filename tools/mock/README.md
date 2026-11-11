@@ -20,6 +20,7 @@ support.
 | `pbp-32:9` | Legion R45w-30, 5120 × 1440 | PBP 50/50, USB-C left, HDMI 1 right |
 | `pbp-32:9-75` | Legion R45w-30, 5120 × 1440 | PBP 75/25, USB-C left, HDMI 1 right |
 | `pip-21:9` | Legion R34w-30, 3440 × 1440 | PiP, DisplayPort main, HDMI 2 inset |
+| `true-split-stale` | Legion R45w-30, 5120 × 1440 | True Split after the OSD: only the left source in `0x60`, stale `0xF5=0x0402` |
 
 ## Rendering a page
 
@@ -27,12 +28,13 @@ support.
 cargo build
 tools/mock/render.sh single-32:9
 tools/mock/render.sh pbp-32:9 gui-pbp.png
-tools/mock/render.sh pbp-32:9 gui-multiview.png multi-view
+tools/mock/render.sh pbp-32:9 gui-multiview.png multi-view 1180x1370
 ```
 
 `render.sh` starts Xvfb, puts `tools/mock` first on `PATH`, resizes the window
-to 1180 × 1200 and captures it with ImageMagick. The optional third argument is
-the page passed to `--page` (default `overview`). Override the connector with
+to 1180 × 1200 (or the optional fourth argument, `WIDTHxHEIGHT`) and captures
+it with ImageMagick. The optional third argument is the page passed to
+`--page` (default `overview`). Override the connector with
 `LEGION_MOCK_CONNECTOR` if a test needs an HDMI link.
 
 For the English documentation screenshots, point `XDG_CONFIG_HOME` at a
