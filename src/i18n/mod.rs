@@ -290,6 +290,13 @@ pub enum Key {
     ModeSingle,
     ModePip,
     ModePbp,
+    SelfSource,
+    SelfSourceHint,
+    SelfSourceUnknown,
+    ErrSelfSourceUnknown,
+    SecondScreenNote,
+    NoSecondScreenNote,
+    DisplaysUnknownNote,
     // ── monitor feature labels and hints (catalog) ───────────────
     FnClockPhase,
     FnRedOffset,

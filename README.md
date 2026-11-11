@@ -10,9 +10,13 @@ physical buttons. The Rust GUI (egui/eframe) exposes brightness, contrast, color
 and input controls, plus **experimental Multi-view** controls (PiP/PbP and window
 layouts). All monitor communication goes through `ddcutil`.
 
-**Hardware support is not fully verified.** The mapping of all eight layout
-previews, PiP/PbP modes and window swapping remains unconfirmed. Recent hardware
-tests also found ignored brightness writes; see [Local hardware test results](#local-hardware-test-results-2026-11-10).
+**Hardware support is partly verified.** The direct two-source PBP write and all
+input switches were confirmed on the physical R45w-30 on 2026-11-11. The safe
+single-mode exit path described below is implemented but has not been exercised
+on hardware yet. The mapping of all eight layout previews and the PiP geometry
+still need a check on the monitor. Recent hardware tests also found ignored
+brightness writes; see
+[Local hardware test results](#local-hardware-test-results-2026-11-10).
 
 ![Legion Monitor interface](docs/screenshot.png)
 
@@ -103,16 +107,16 @@ capabilities (`ddcutil capabilities`). Enumerated features use buttons, binary
 
 An advertised capability does not guarantee that writes work, especially for
 unknown manufacturer-specific features. Features the monitor does not report
-appear as placeholder rows: they show the available interface sections, not
-proof of device support.
+are not shown at all: the rows are built from the values the monitor actually
+returned, so an unsupported feature leaves no trace in the interface.
 
 | Page | Contents |
 |---|---|
 | Overview | Display mode, active input, brightness, contrast and A/B configuration saving |
-| Picture | Brightness, contrast, sharpness, saturation, hue, gamma and black level |
+| Picture | Brightness, contrast, sharpness, saturation, hue, gamma and black level — only the features the monitor reports |
 | Color | Color temperature, presets and RGB gains |
 | Inputs | DisplayPort, HDMI 1, HDMI 2 and USB-C; the reported active input is highlighted |
-| Multi-view (experimental) | Mode selection and eight layout previews; geometry, PiP/PbP mapping and window swapping remain unverified |
+| Multi-view (experimental) | Mode selection, eight layout codes and the source of each window; PBP writes both sources in one `0x60` pair, without a swap. Leaving a split checks for a second screen and, when there is none, keeps this computer’s source visible; geometry and PiP mapping remain unverified |
 | Profiles | A/B configurations and any number of named profiles |
 | Advanced | Volume, mute, power mode, manufacturer-specific features and reset |
 
@@ -153,8 +157,8 @@ cargo test --locked
 CI (`.github/workflows/ci.yml`) runs these checks and a release build on Ubuntu.
 The default tests do not require a monitor.
 `worker::tests::live_reversible_picture_and_profile_roundtrip` is ignored by
-default and requires `LEGION_LIVE_TEST=1`, the identified test monitor and
-permission to access `/dev/i2c-*`.
+default and requires `LEGION_LIVE_TEST=1`, `LEGION_LIVE_SERIAL=<serial>` for
+the identified test monitor and permission to access `/dev/i2c-*`.
 
 ## Profiles
 
@@ -187,9 +191,28 @@ manufacturer-specific registers. Only allowed settings present in the current
 readback are saved. Values loaded from existing profile files are filtered too.
 
 Applying a profile sends a sequence of writes with short pauses because mode
-changes may interrupt the EDID/DDC connection. Multi-view settings are written
-in the order `0xF5`, then `0xF2`, with the input switch last. Success requires
-matching readback; a successful command exit alone is not sufficient.
+changes may interrupt the EDID/DDC connection. The color preset is restored
+after temperature/RGB settings, since those writes can change the preset.
+This ordering still needs a hardware roundtrip: some preset/RGB combinations
+may not coexist. Multi-view settings are written in the order `0xF5`, then
+`0xF2` (legacy exchange), with the input switch last. A PBP source change writes
+`0xA5 = 0x0200`, an optional `0xF5` layout repair and then both sources in one
+`0x60` write. Leaving a split uses a different sequence, because closing PBP can
+leave the monitor on either half:
+
+1. the application determines which monitor input this computer is using
+   (the single-mode `0x60` value, a connector match in the active PBP pair, or
+   the user’s choice);
+2. if an independent second screen is connected, it only writes `0xA5 = 0` —
+   the desktop can always be recovered on that screen;
+3. without a second screen it first writes `0x60 = (source << 8) | source` while
+   PBP is still active, so both halves show this computer, then closes the split
+   with `0xA5 = 0`, and finally writes the single input `0x60 = source`.
+
+The topology check uses `kscreen-doctor -j`, falling back to `xrandr --query`;
+if neither can be read, the application treats the topology as unknown and asks
+for the source instead of guessing. Success requires matching readback; a
+successful command exit alone is not sufficient.
 
 There is no guarantee of atomic rollback on failure: some settings may already
 have changed. A/B highlighting reflects a match between the entire nonempty
@@ -199,48 +222,113 @@ registers are missing from the readback.
 
 ## Protocol findings
 
-These findings come from static analysis of Lenovo's Windows service
-(`LDCCService.exe` from `LenovoDCCServiceInstaller.msi`) and limited earlier
-hardware observations. Accepting a `0xF2`/`0xF5` write and reading back its value
-does not prove that the physical picture matches a preview, that all eight
-geometries are mapped correctly, or that PiP/PbP selection or window swapping
-works as intended.
+These findings come from static analysis of Lenovo's Windows background service
+(`LenovoDCCBackGroundService.exe` from `LenovoDCCServiceInstaller.msi`) and its
+PIP/PBP web plugin, the `supportedmodels.json` shipped with Lenovo Display
+Control Center 3.0.32161 (`vcpCodesDef`), and hardware observations. Accepting a
+`0xF2`/`0xF5` write and reading back its value does not prove that the physical
+picture matches a preview, that all eight geometries are mapped correctly, or
+that PiP/PbP selection works as intended.
 
 | Feature | VCP | Evidence / direction | Notes |
 |---|---|---|---|
-| Multi-view control | `0xF2` | Write and readback observed | Analysis suggests `1` / `0` for enable / disable; accepting a value does not confirm mode mapping |
-| Layout selection | `0xF5` | Write and readback observed | Candidate values `0x0101`…`0x0402` and `0`; all eight physical geometries remain unverified |
-| Layout status | `0xF4` | Read in the examined path | Decoding `0x01xx` as PiP, `0x02xx` as PbP and the low byte as a variant comes from Windows code analysis, not verified hardware mapping |
-| Window inputs | `0xF0` | Unreliable readback | Byte meanings and left/right or main/secondary assignments remain unverified |
-| Input source | `0x60` | Read/write control | `0x0f` DP, `0x11` HDMI 1, `0x12` HDMI 2, `0x31` USB-C |
+| Multi-view control | `0xF2` | Write and readback observed | Lenovo calls it *PIP/PBP Swap*: `0` disables the PIP/PBP window, `1` swaps the sources, `3` leaves full-screen mode |
+| Layout selection | `0xF5` | Write and readback observed | Lenovo calls it *PBP Control*: low byte = position (`1` right, `2` left, `3` top, `4` bottom), high byte = ratio (`1` 1:1, `2` 2:1, `3` 1:2, `4` 3:1). On the R45w-30 only `0x0101` (50/50) and `0x0401` (70/30) change the picture, the `…02` values are rejected and `0x0201`/`0x0301` are ignored |
+| Layout status | `0xF4` | Read in the examined path | Lenovo calls it *PIP Size* (`0` min … `0x64` max); the R45w-30 uses it differently and reports `0x0201` for every active split |
+| Window selection | `0xA5` | Write and readback observed | Lenovo calls it *Window Select*: `0x0000` closes PIP/PBP, `0x0100` selects the PIP window, `0x0200` the PBP window. The monitor never reads the selection back |
+| Window inputs | `0xF0` | Read in the examined path | Lenovo calls it *Audio Source*; on the R45w-30 it reports the two window sources (low byte = left window, high byte = right) but is unreadable most of the time (`0xFFFF`) |
+| Input source | `0x60` | Read/write control | `0x0f` DP, `0x11` HDMI 1, `0x12` HDMI 2, `0x31` USB-C. Outside a split it takes one source byte. In PBP Lenovo writes the whole pair as `(right << 8) | left`; that is the direct way to set the right half, with no `0xA5` selector and no `0xF2` exchange. `0xA5 = 0x0200` was verified on the R45w-30; `0xA5 = 0x0100` in PBP froze the monitor's OSD |
 | Brightness / contrast | `0x10` / `0x12` | Standard DDC controls | Reads work in local tests; the recent brightness-change test failed, as described below |
 
-The examined Multi-view path writes `F2` and `F5` and reads `F4` for status; no
-direct writes to `F4` were found there. This does not prove that other paths or
-versions never write `F4`.
+Lenovo's `SetPIPPBPState` opens PBP with `0xA5 = 0x0200`; `SetPBPMode` writes the
+`F5` layout; `SetPIPPBPConfig` reads `F5` and writes `0x60` as the two-source pair.
+The examined Multi-view path does not write `F4` directly. This does not prove
+that other paths or versions never write it.
 
-After an `F2`/`F5` write, the monitor may disappear from the bus for several
-seconds (`EDID has changed`). Reads are therefore retried, and writes use
+After an `F2`/`F5`/`0xA5` write, the monitor may disappear from the bus for
+several seconds (`EDID has changed`). Reads are therefore retried, and writes use
 `--noverify`. This option does not replace later readback or visual verification
 on the physical monitor.
 
-## Local hardware test results (2026-11-10)
+## Local hardware test results (2026-11-10/11)
 
 The tested R45w-30 reported brightness `100`, contrast `87` and USB-C input
 (`0x31`); these values also appeared in the GUI. The read-path repair includes
 `--terse` output, short batches of VCP codes and removal of the worker's
 48-feature limit.
 
-A brightness change from `100 → 95` failed: `ddcutil setvcp` exited with code `0`,
-but subsequent readback still returned `100`. Temporarily disabling HDR produced
-the same result; HDR was restored afterward. **The cause of ignored writes
-remains unknown.** The application reports a readback mismatch instead of
-success.
+**Earlier failed experiment (2026-11-10):** a brightness change `100 → 95`
+returned exit code `0` from `ddcutil setvcp --noverify`, but delayed readback
+still returned `100`. Temporarily disabling HDR in **KDE** produced the same
+result; KDE HDR was restored afterward. This experiment did not establish the
+cause of the ignored write.
 
-A GUI test with isolated A/B profiles ended with a readback of `100 / 87`; this
-is not evidence of successful settings switching. Full PiP/PbP operation,
-physical layout geometry and window swapping remain unverified. A successful
-build and passing tests without a monitor do not establish hardware support.
+**Later observations reported by a separate hardware-test session:** with
+`HDR: Auto` in the **monitor's OSD**, brightness/contrast writes reportedly
+failed verification; after manually selecting `HDR: Off` there, the session
+reported matching readbacks for brightness `100 → 89`, contrast `87 → 76`, RGB
+gains and the color preset. KDE HDR and the monitor's OSD HDR setting are
+different controls. These later observations suggest an OSD-dependent write
+restriction, but do not by themselves establish a universal cause for every
+earlier ignored write. The report lists OSD HDR restoration to `Auto` as a
+manual follow-up; it has not been rechecked in this repair pass.
+
+Other confirmed findings:
+
+- Sharpness (`0x87`) is shown in the raw DDC scale while the OSD shows 0-100 in
+  steps of 20 (`4 → 80`, `5 → 100`). The monitor reports a maximum of `4` but
+  uses `5` for OSD 100, and writing `5` always fails — that value can only be
+  restored from the OSD.
+- Gamma (`0x72`) is displayed as a raw number (`35840` for `+0.2`) and its
+  slider (`0..40960`) cannot reliably hit the monitor's discrete presets: a
+  one-pixel error produced `35500`, which the monitor rejected.
+- The color temperature row offers four fixed values while the monitor uses a
+  `0..63` scale, so the current value is never highlighted and a click writes an
+  unrelated value.
+- In the tested `1f7936b` build, the inputs page repeated entries and labelled
+  USB-C as "Unrecognized value", because the capability string lists
+  `0F 11 12 31 FF 0F 11 12 31`. The current working-tree parser deduplicates
+  inputs and uses known connector names; this is a software fix, not a new
+  hardware verification.
+- Switching the input from USB-C to HDMI 1 and back worked; the monitor kept
+  answering over DDC while the picture was gone.
+- Multi-view: of the eight layout previews only two do anything on this monitor.
+  `0x0101` splits the picture 50/50 (confirmed on screen) and `0x0401` splits it 75/25.
+  The tiles show the raw register codes, so nothing misleading is drawn, but the
+  names ("four windows") are guesses from the Lenovo Windows service, not from a
+  measurement. The four "mirrored" values are rejected by the monitor and two more
+  are ignored, and the "picture in picture" button only writes `0xF2` and creates no
+  small window. `0xF4` always reports `0x0201` while a split is active, so it does not
+  describe the layout, and entering a split switches the desktop output from
+  5120×1440 to 2560×1440.
+- In PBP both window sources are written at once: `0x60 = (right << 8) | left`.
+  The low byte is the left/primary window and the high byte the right/secondary
+  one — the same encoding as `0xF0`, and the same write Lenovo's
+  `SetPIPPBPConfig` performs. No `0xA5` window selector and no `0xF2` exchange are
+  needed, so the right half is reached directly and the monitor's OSD is not put
+  into the state that froze it. The application now builds exactly this pair, so
+  the old "write the left half, then swap" workaround is gone.
+- `0xA5 = 0x0200` opens the PBP window and `0x0100` selects the PIP window; mixing
+  them up is what froze the OSD on the R45w-30. Outside a split `0x60` still takes
+  a single source byte.
+- `0xF0` reports the sources of both windows (low byte = left, high byte = right)
+  but is unreadable most of the time (`0xFFFF`). The application falls back to the
+  pair read from `0x60`.
+- On 2026-11-11 the direct PBP pair write was exercised through the GUI on the
+  R45w-30: PBP was enabled, the left and right sources were selected, and all
+  inputs switched correctly. The old swap path was not used and the OSD did not
+  freeze.
+- The single-mode exit safety logic was added afterwards and is covered by unit
+  tests and an offline UI run only. It has not been sent to a monitor yet; the
+  hardware check is deliberately deferred until the laptop is connected again.
+  In particular, `0x60 = (source << 8) | source` while PBP is active is the
+  step that still needs confirmation on the R45w-30.
+
+The full field-by-field matrix and the remaining gaps are kept as local
+hardware notes outside the repository. A successful build and passing tests
+without a monitor do not establish
+hardware support. The PBP source path has since been exercised on the monitor;
+the layout geometry and PiP mapping remain unverified.
 
 ## Offline behavior
 
@@ -259,6 +347,7 @@ connection and readback. “Search again” reruns monitor detection.
 | `src/i18n/mod.rs` | `Lang`, `Key`, `Strings` and locale-based language selection |
 | `src/i18n/<lang>.rs` | Translation tables (`ENTRIES`) |
 | `src/settings.rs` | Selected-language persistence in `settings.json` |
+| `src/topology.rs` | Desktop display scan (KScreen/XRandR) and monitor-link inference |
 | `src/worker.rs` | Worker thread, commands, events and read retries |
 | `src/profiles.rs` | Profile JSON persistence and configuration directory |
 | `src/ui/mod.rs` | Application state (`App`), update loop, shortcuts and worker communication |

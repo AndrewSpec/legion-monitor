@@ -80,18 +80,23 @@ impl App {
             ui.label(RichText::new(&hint).size(11.0).color(FAINT));
         }
 
-        let resp = ui.add(
+        let editable = self.can_edit();
+        let resp = ui.add_enabled(
+            editable,
             egui::Slider::new(&mut cur, 0.0..=max)
                 .show_value(false)
                 .trailing_fill(true),
         );
-        if resp.changed() {
+        #[cfg(test)]
+        ui.ctx()
+            .data_mut(|d| d.insert_temp(egui::Id::new("test-slider-rect"), resp.rect));
+        if editable && resp.changed() {
             self.pending.insert(code, cur.round() as u16);
             if !resp.dragged() {
                 self.set_value(code, cur.round() as u16);
             }
         }
-        if resp.drag_stopped() {
+        if editable && resp.drag_stopped() {
             self.set_value(code, cur.round() as u16);
         }
         ui.add_space(6.0);
@@ -112,7 +117,10 @@ impl App {
                 }
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(egui::Checkbox::without_text(&mut on)).changed() {
+                if ui
+                    .add_enabled(self.can_edit(), egui::Checkbox::without_text(&mut on))
+                    .changed()
+                {
                     self.set_value(code, if on { 1 } else { 0 });
                 }
             });
@@ -131,12 +139,14 @@ impl App {
         ui.label(RichText::new(label).size(13.0).color(TEXT));
         ui.add_space(6.0);
         let mut chosen: Option<u16> = None;
-        ui.horizontal_wrapped(|ui| {
-            for (value, key) in options {
-                if pill(ui, self.t(*key), current == *value).clicked() {
-                    chosen = Some(*value);
+        ui.add_enabled_ui(self.can_edit(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (value, key) in options {
+                    if pill(ui, self.t(*key), current == *value).clicked() {
+                        chosen = Some(*value);
+                    }
                 }
-            }
+            })
         });
         if let Some(v) = chosen {
             self.set_value(code, v);
@@ -157,12 +167,14 @@ impl App {
         ui.label(RichText::new(label).size(13.0).color(TEXT));
         ui.add_space(6.0);
         let mut chosen: Option<u16> = None;
-        ui.horizontal_wrapped(|ui| {
-            for (value, name) in options {
-                if pill(ui, name, current == *value).clicked() {
-                    chosen = Some(*value);
+        ui.add_enabled_ui(self.can_edit(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (value, name) in options {
+                    if pill(ui, name, current == *value).clicked() {
+                        chosen = Some(*value);
+                    }
                 }
-            }
+            })
         });
         if let Some(v) = chosen {
             self.set_value(code, v);
@@ -210,5 +222,324 @@ impl App {
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 7.0), Sense::hover());
         ui.painter().rect_filled(rect, CornerRadius::same(4), BG);
         ui.add_space(8.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_for_test() -> (App, std::sync::mpsc::Receiver<Cmd>) {
+        let (tx, commands) = std::sync::mpsc::channel();
+        let (_, rx) = std::sync::mpsc::channel();
+        let app = App {
+            worker: Worker { tx, rx },
+            conn: Conn::Ok(crate::ddc::Monitor::default()),
+            caps: Capabilities::default(),
+            vals: [(
+                0x10,
+                VcpValue {
+                    value: 80,
+                    max: 100,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            busy: false,
+            partial_read: false,
+            toast: None,
+            section: Section::Overview,
+            store: Store::default(),
+            pending: BTreeMap::new(),
+            new_profile_name: String::new(),
+            show_vendor: false,
+            confirm_reset: false,
+            log: Vec::new(),
+            started: true,
+            win_sources: [0, 0],
+            displays: crate::topology::Displays::default(),
+            self_source: None,
+            settings: Settings::default(),
+            lang: Lang::En,
+            tr: i18n::strings(Lang::En),
+        };
+        (app, commands)
+    }
+
+    fn slider_frame(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) -> Pos2 {
+        let mut target = Pos2::ZERO;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 200.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    app.slider_row(ui, 0x10, "Brightness", "");
+                    target = ctx
+                        .data(|d| d.get_temp::<Rect>(egui::Id::new("test-slider-rect")))
+                        .unwrap()
+                        .left_center()
+                        + Vec2::new(30.0, 0.0);
+                });
+            },
+        );
+        target
+    }
+
+    fn mode_frame(ctx: &egui::Context, app: &mut App, events: Vec<egui::Event>) {
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 350.0))),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| app.mode_selector(ui));
+            },
+        );
+    }
+
+    fn click_mode_target(app: &mut App, ctx: &egui::Context, target: usize) {
+        mode_frame(ctx, app, vec![]);
+        let pos = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new(("test-mode-rect", target))))
+            .unwrap()
+            .center();
+        mode_frame(
+            ctx,
+            app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        mode_frame(
+            ctx,
+            app,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+    }
+
+    #[test]
+    fn pbp_single_switch_uses_the_detected_or_chosen_source() {
+        for (second_screen, expected) in [(false, Some(0x31)), (true, None)] {
+            let (mut app, commands) = app_for_test();
+            app.vals.insert(0xf2, VcpValue { value: 1, max: 1 });
+            app.vals.insert(
+                0xf4,
+                VcpValue {
+                    value: 0x0201,
+                    max: 0xffff,
+                },
+            );
+            app.vals.insert(
+                0xf5,
+                VcpValue {
+                    value: 0x0101,
+                    max: 0xffff,
+                },
+            );
+            app.displays = crate::topology::Displays {
+                known: true,
+                second_screen,
+            };
+            app.self_source = Some(0x31);
+            let ctx = egui::Context::default();
+            click_mode_target(&mut app, &ctx, 0);
+            match commands.try_recv().unwrap() {
+                Cmd::DisableMultiView { source, pbp } => {
+                    assert_eq!(source, expected);
+                    assert!(pbp);
+                }
+                other => panic!("unexpected command: {:?}", std::mem::discriminant(&other)),
+            }
+        }
+    }
+
+    #[test]
+    fn mode_clicks_never_send_a_pip_guess_and_respect_busy_offline() {
+        for (busy, connected) in [(false, true), (true, true), (false, false)] {
+            for target in 0..3 {
+                let (mut app, commands) = app_for_test();
+                app.busy = busy;
+                if !connected {
+                    app.conn = Conn::Err("offline".into());
+                }
+                // A corrupt F5 must not be echoed back when enabling PbP.
+                app.vals.insert(
+                    0xf5,
+                    VcpValue {
+                        value: 0xffff,
+                        max: 0xffff,
+                    },
+                );
+                // The single-mode path needs a known topology and source.
+                app.displays = crate::topology::Displays {
+                    known: true,
+                    second_screen: false,
+                };
+                app.self_source = Some(0x31);
+                let ctx = egui::Context::default();
+                mode_frame(&ctx, &mut app, vec![]);
+                let pos = ctx
+                    .data(|d| d.get_temp::<Rect>(egui::Id::new(("test-mode-rect", target))))
+                    .unwrap()
+                    .center();
+                mode_frame(
+                    &ctx,
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+                mode_frame(
+                    &ctx,
+                    &mut app,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                );
+                if busy || !connected || target == 1 {
+                    assert!(commands.try_recv().is_err());
+                    assert_eq!(app.busy, busy);
+                } else {
+                    match (target, commands.try_recv().unwrap()) {
+                        (0, Cmd::DisableMultiView { source, pbp }) => {
+                            assert_eq!(source, Some(0x31));
+                            assert!(!pbp);
+                        }
+                        (2, Cmd::SetPbp { layout }) => {
+                            assert_eq!(layout, Some(0x0101));
+                        }
+                        (_, other) => {
+                            panic!("unexpected command: {:?}", std::mem::discriminant(&other))
+                        }
+                    }
+                    assert!(app.busy);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn single_switch_without_second_screen_requires_a_source() {
+        let (mut app, commands) = app_for_test();
+        app.vals.insert(0xf2, VcpValue { value: 1, max: 1 });
+        app.vals.insert(
+            0xf4,
+            VcpValue {
+                value: 0x0201,
+                max: 0xffff,
+            },
+        );
+        app.displays = crate::topology::Displays {
+            known: true,
+            second_screen: false,
+        };
+        app.self_source = None;
+
+        let ctx = egui::Context::default();
+        mode_frame(&ctx, &mut app, vec![]);
+        let pos = ctx
+            .data(|d| d.get_temp::<Rect>(egui::Id::new(("test-mode-rect", 0))))
+            .unwrap()
+            .center();
+        mode_frame(
+            &ctx,
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        mode_frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+
+        assert!(commands.try_recv().is_err(), "the split must stay on");
+        assert!(app.toast.is_some(), "the user must be told why");
+    }
+
+    #[test]
+    fn slider_does_not_stage_unsent_edits_while_busy_or_offline() {
+        for (busy, connected) in [(true, true), (false, false), (false, true)] {
+            let (mut app, commands) = app_for_test();
+            app.busy = busy;
+            if !connected {
+                app.conn = Conn::Err("offline".into());
+            }
+            let ctx = egui::Context::default();
+            let pos = slider_frame(&ctx, &mut app, vec![]);
+            slider_frame(
+                &ctx,
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            slider_frame(
+                &ctx,
+                &mut app,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            if busy || !connected {
+                assert!(app.pending.is_empty());
+                assert_eq!(app.value(0x10), Some(80));
+                assert!(commands.try_recv().is_err());
+            } else {
+                assert!(
+                    !app.pending.is_empty(),
+                    "idle control must accept the same click"
+                );
+                assert!(matches!(
+                    commands.try_recv(),
+                    Ok(Cmd::Set { code: 0x10, .. })
+                ));
+            }
+        }
     }
 }

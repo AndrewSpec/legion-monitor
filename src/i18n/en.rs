@@ -95,12 +95,9 @@ pub const ENTRIES: &[(Key, &str)] = &[
     ),
     (MvMode, "Mode"),
     (CardLayouts, "Window layout"),
-    (LayoutHint, "Click a preview to set the split. The picture may flicker."),
+    (LayoutHint, "Experimental codes, not geometry previews. A write may interrupt the picture; a highlighted code only matches the register readback."),
     (CardWindowsShort, "Windows"),
-    (
-        WindowsNote,
-        "The monitor decides the order of sources in the windows; above you see the state read from the device.",
-    ),
+    (WindowsNote, "In PBP both sources are written to register 0x60: the left one in the low byte, the right one in the high byte. No swapping is needed — the right half is set directly."),
     (SourcesPreview, "Sources read from the monitor — preview only."),
     (SourceFmt, "Source: {}"),
     (InputUnknownFmt, "Input 0x{}"),
@@ -225,6 +222,13 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (ModeSingle, "Single"),
     (ModePip, "Picture in picture"),
     (ModePbp, "Two pictures"),
+    (SelfSource, "This computer's source"),
+    (SelfSourceHint, "Required so the picture returns to this desktop when the split is turned off."),
+    (SelfSourceUnknown, "Cannot tell which input this computer uses — select it above."),
+    (ErrSelfSourceUnknown, "This computer's source is not selected; the split was left on."),
+    (SecondScreenNote, "A second screen was detected — turning the split off does not need a source change."),
+    (NoSecondScreenNote, "No second screen was detected — turning the split off will select this computer's source."),
+    (DisplaysUnknownNote, "Could not check the screen list — turning the split off will use this computer's source."),
 
     // ── monitor feature labels and hints ────────────────────────────────
     (FnClockPhase, "Clock / phase"),
@@ -270,10 +274,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (WriteMismatch, "Monitor did not confirm {} settings"),
     (WriteUnconfirmed, "Command sent — full readback unavailable"),
     (WriteFailed, "Write interrupted: {}"),
-    (
-        ExperimentalMulti,
-        "Experimental: PiP/PbP selection, layout previews and window-source decoding are not fully verified. Readback confirms registers only, not the physical picture.",
-    ),
+    (ExperimentalMulti, "PiP selection is unavailable: no confirmed command. PbP and layout codes remain experimental; readback does not verify the physical picture."),
     (
         PartialRead,
         "Some settings could not be read. Missing values are not confirmed; refresh to retry.",

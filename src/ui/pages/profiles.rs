@@ -48,10 +48,22 @@ impl App {
                         });
                         ui.add_space(12.0);
                         ui.horizontal(|ui| {
-                            if accent_button(ui, self.t(Key::Apply)).clicked() {
+                            if ui
+                                .add_enabled_ui(self.can_edit(), |ui| {
+                                    accent_button(ui, self.t(Key::Apply))
+                                })
+                                .inner
+                                .clicked()
+                            {
                                 self.apply_profile(p);
                             }
-                            if small_button(ui, self.t(Key::Overwrite)).clicked() {
+                            if ui
+                                .add_enabled_ui(self.can_edit() && !self.vals.is_empty(), |ui| {
+                                    small_button(ui, self.t(Key::Overwrite))
+                                })
+                                .inner
+                                .clicked()
+                            {
                                 self.save_to_slot(slot);
                             }
                             if small_button(ui, self.t(Key::Delete)).clicked() {
@@ -97,7 +109,13 @@ impl App {
                                 .color(FAINT),
                         );
                         ui.add_space(12.0);
-                        if accent_button(ui, self.t(Key::SaveCurrent)).clicked() {
+                        if ui
+                            .add_enabled_ui(self.can_edit() && !self.vals.is_empty(), |ui| {
+                                accent_button(ui, self.t(Key::SaveCurrent))
+                            })
+                            .inner
+                            .clicked()
+                        {
                             self.save_to_slot(slot);
                         }
                     }
@@ -113,9 +131,14 @@ impl App {
                     [260.0, 30.0],
                     egui::TextEdit::singleline(&mut self.new_profile_name).hint_text(name_hint),
                 );
-                let can =
-                    !self.new_profile_name.trim().is_empty() && !self.busy && !self.vals.is_empty();
-                if accent_button(ui, self.t(Key::SaveAsProfile)).clicked() && can {
+                let can = !self.new_profile_name.trim().is_empty()
+                    && self.can_edit()
+                    && !self.vals.is_empty();
+                if ui
+                    .add_enabled_ui(can, |ui| accent_button(ui, self.t(Key::SaveAsProfile)))
+                    .inner
+                    .clicked()
+                {
                     let p = Profile {
                         id: profiles::next_id(&self.store),
                         name: self.new_profile_name.trim().to_string(),
@@ -157,9 +180,12 @@ impl App {
                                 self.store.profiles.retain(|x| x.id != p.id);
                                 self.persist(self.t(Key::ToastProfileDeleted).into());
                             }
-                            if small_button(ui, self.t(Key::Overwrite)).clicked()
-                                && !self.busy
-                                && !self.vals.is_empty()
+                            if ui
+                                .add_enabled_ui(self.can_edit() && !self.vals.is_empty(), |ui| {
+                                    small_button(ui, self.t(Key::Overwrite))
+                                })
+                                .inner
+                                .clicked()
                             {
                                 let snapshot = self.snapshot_values();
                                 if let Some(item) =
@@ -171,7 +197,13 @@ impl App {
                                     self.tf(Key::ToastSaved, self.snapshot_values().len()),
                                 );
                             }
-                            if accent_button(ui, self.t(Key::Apply)).clicked() {
+                            if ui
+                                .add_enabled_ui(self.can_edit(), |ui| {
+                                    accent_button(ui, self.t(Key::Apply))
+                                })
+                                .inner
+                                .clicked()
+                            {
                                 self.apply_profile(&p);
                             }
                         });

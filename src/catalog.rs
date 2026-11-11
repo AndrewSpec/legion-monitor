@@ -300,69 +300,21 @@ pub fn power_modes() -> &'static [(u16, Key)] {
     ]
 }
 
-/// Experimental candidates for F5 values. `panes` are UI illustrations,
-/// not a reconstructed or confirmed physical monitor geometry.
+/// Experimental F5 candidates. Numeric codes do not establish geometry.
 #[derive(Clone, Copy, Debug)]
 pub struct Layout {
     pub value: u16,
-    pub panes: &'static [(f32, f32, f32, f32)],
-}
-
-const fn p(x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
-    (x, y, w, h)
 }
 
 pub const LAYOUTS: &[Layout] = &[
-    Layout {
-        value: 0x0101,
-        panes: &[p(0.0, 0.0, 0.5, 1.0), p(0.5, 0.0, 0.5, 1.0)],
-    },
-    Layout {
-        value: 0x0102,
-        panes: &[p(0.0, 0.0, 0.45, 1.0), p(0.45, 0.0, 0.55, 1.0)],
-    },
-    Layout {
-        value: 0x0201,
-        panes: &[p(0.0, 0.0, 1.0, 0.5), p(0.0, 0.5, 1.0, 0.5)],
-    },
-    Layout {
-        value: 0x0202,
-        panes: &[p(0.0, 0.0, 1.0, 0.45), p(0.0, 0.45, 1.0, 0.55)],
-    },
-    Layout {
-        value: 0x0301,
-        panes: &[
-            p(0.0, 0.0, 0.5, 1.0),
-            p(0.5, 0.0, 0.5, 0.5),
-            p(0.5, 0.5, 0.5, 0.5),
-        ],
-    },
-    Layout {
-        value: 0x0302,
-        panes: &[
-            p(0.5, 0.0, 0.5, 1.0),
-            p(0.0, 0.0, 0.5, 0.5),
-            p(0.0, 0.5, 0.5, 0.5),
-        ],
-    },
-    Layout {
-        value: 0x0401,
-        panes: &[
-            p(0.0, 0.0, 0.5, 0.5),
-            p(0.5, 0.0, 0.5, 0.5),
-            p(0.0, 0.5, 0.5, 0.5),
-            p(0.5, 0.5, 0.5, 0.5),
-        ],
-    },
-    Layout {
-        value: 0x0402,
-        panes: &[
-            p(0.0, 0.0, 0.6, 1.0),
-            p(0.6, 0.0, 0.4, 0.333),
-            p(0.6, 0.333, 0.4, 0.333),
-            p(0.6, 0.666, 0.4, 0.334),
-        ],
-    },
+    Layout { value: 0x0101 },
+    Layout { value: 0x0102 },
+    Layout { value: 0x0201 },
+    Layout { value: 0x0202 },
+    Layout { value: 0x0301 },
+    Layout { value: 0x0302 },
+    Layout { value: 0x0401 },
+    Layout { value: 0x0402 },
 ];
 
 pub fn layout_for(value: u16) -> Option<&'static Layout> {
@@ -390,11 +342,15 @@ impl MultiMode {
 }
 
 /// Decodes the state from the registers that were read.
+///
+/// `F2` is the enable/swap register and is authoritative when it is zero:
+/// the monitor then has no split. Its non-zero values are not stable — after
+/// an input switch it can read back `0x5D` — so in that case the split type
+/// comes from the high byte of `F4` (`0x01` = PIP, `0x02` = PBP). Requiring
+/// `F2 == 1` hid the window pickers exactly when the monitor was in PBP.
 pub fn multi_mode(f2: Option<u16>, f4: Option<u16>) -> MultiMode {
-    match f2 {
-        Some(0) => return MultiMode::Off,
-        None => return MultiMode::Unknown,
-        Some(_) => {}
+    if f2 == Some(0) {
+        return MultiMode::Off;
     }
     match f4.map(|v| v >> 8) {
         Some(0x01) => MultiMode::PictureInPicture,
@@ -403,28 +359,87 @@ pub fn multi_mode(f2: Option<u16>, f4: Option<u16>) -> MultiMode {
     }
 }
 
-/// Sources visible in the windows — from VCP F0 (two bytes: left, right).
+/// Sources visible in the windows — from VCP F0 (two bytes).
 ///
 /// The monitor returns this register inconsistently (observed 0x0031, 0x0202,
-/// 0x0001), so only values that make sense as picture sources are accepted —
-/// otherwise we show "unknown" instead of an invented input.
+/// 0x0001, 0xFFFF), so only values that make sense as picture sources are
+/// accepted — otherwise we show "unknown" instead of an invented input.
+///
+/// Encoding is low byte = primary/left window, high byte = secondary/right
+/// window. Two independent observations agree: with the left half on HDMI 1
+/// and the right on USB-C the register read `0x3111`, and Lenovo's own service
+/// writes VCP 0x60 as `(secondary << 8) | primary`. After the OSD set the right
+/// window to HDMI 2 it read `0x3112`; after a swap the picture followed
+/// `0x1231`, which again puts the right window in the high byte.
+///
+/// The register is also unreliable in another way: it usually reports the
+/// source of the window that was written last, not a stable left/right pair.
 pub fn window_sources(f0: Option<u16>) -> Option<(u16, u16)> {
     let v = f0?;
-    let left = (v >> 8) & 0xff;
-    let right = v & 0xff;
+    let left = v & 0xff;
+    let right = (v >> 8) & 0xff;
     if !known_source(left as u8) || !known_source(right as u8) {
         return None;
     }
-    if left == 0 && right == 0 {
+    // A split always has two pictures; a zero or 0xFF byte means the monitor
+    // did not report that half, not that the input is "none".
+    if left == 0 || right == 0 {
         return None;
     }
     Some((left, right))
 }
 
+/// Combines the two window sources into the 16-bit value of VCP 0x60.
+///
+/// Lenovo's service writes `(secondary << 8) | primary`; primary is the
+/// left/top window and secondary the right/bottom one.
+pub fn window_pair(left: u16, right: u16) -> u16 {
+    ((right & 0xff) << 8) | (left & 0xff)
+}
+
 /// Whether an F0 byte looks like a picture-source code (0 = no window, 0xff = unknown).
-fn known_source(b: u8) -> bool {
+pub fn known_source(b: u8) -> bool {
     matches!(
         b,
-        0x00 | 0x01 | 0x03 | 0x0f | 0x10 | 0x11 | 0x12 | 0x13 | 0x1f | 0x31 | 0xff
+        0x01 | 0x03 | 0x0f | 0x10 | 0x11 | 0x12 | 0x13 | 0x1f | 0x31
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multi_mode_uses_f4_when_f2_is_stale() {
+        for f2 in [None, Some(2), Some(93), Some(u16::MAX)] {
+            assert_eq!(multi_mode(f2, None), MultiMode::Unknown);
+            assert_eq!(multi_mode(f2, Some(0)), MultiMode::Unknown);
+        }
+        assert_eq!(multi_mode(Some(0), Some(0x0201)), MultiMode::Off);
+        assert_eq!(
+            multi_mode(Some(1), Some(0x0101)),
+            MultiMode::PictureInPicture
+        );
+        assert_eq!(
+            multi_mode(Some(1), Some(0x0201)),
+            MultiMode::PictureByPicture
+        );
+        // After an input switch the monitor can report a stale F2; the split
+        // type from F4 is still usable.
+        assert_eq!(
+            multi_mode(Some(0x5d), Some(0x0201)),
+            MultiMode::PictureByPicture
+        );
+        assert_eq!(multi_mode(Some(1), Some(0)), MultiMode::Unknown);
+    }
+
+    #[test]
+    fn window_sources_are_low_left_high_right() {
+        assert_eq!(window_sources(Some(0x3111)), Some((0x11, 0x31)));
+        assert_eq!(window_sources(Some(0x1231)), Some((0x31, 0x12)));
+        assert_eq!(window_sources(Some(0xffff)), None);
+        assert_eq!(window_sources(Some(0)), None);
+        assert_eq!(window_pair(0x11, 0x31), 0x3111);
+        assert_eq!(window_pair(0x31, 0x12), 0x1231);
+    }
 }

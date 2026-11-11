@@ -95,12 +95,9 @@ pub const ENTRIES: &[(Key, &str)] = &[
     ),
     (MvMode, "Modo"),
     (CardLayouts, "Disposição das janelas"),
-    (LayoutHint, "Clique numa pré-visualização para definir a divisão. A imagem pode cintilar."),
+    (LayoutHint, "Códigos experimentais, não pré-visualizações de geometria. A escrita pode interromper a imagem; o código destacado corresponde apenas ao registo lido."),
     (CardWindowsShort, "Janelas"),
-    (
-        WindowsNote,
-        "O monitor determina a ordem das fontes nas janelas; acima é apresentado o estado lido do dispositivo.",
-    ),
+    (WindowsNote, "Em PBP, as duas fontes são escritas no registro 0x60: a esquerda no byte baixo e a direita no byte alto. Não é preciso trocar: o lado direito é definido diretamente."),
     (SourcesPreview, "Fontes lidas do monitor — apenas pré-visualização."),
     (SourceFmt, "Fonte: {}"),
     (InputUnknownFmt, "Entrada 0x{}"),
@@ -225,6 +222,13 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (ModeSingle, "Única"),
     (ModePip, "Imagem na imagem"),
     (ModePbp, "Duas imagens"),
+    (SelfSource, "Fonte deste computador"),
+    (SelfSourceHint, "Necessária para que a imagem volte a este ambiente de trabalho ao desativar a divisão."),
+    (SelfSourceUnknown, "Não foi possível determinar que entrada este computador usa — selecione-a acima."),
+    (ErrSelfSourceUnknown, "A fonte deste computador não está selecionada; a divisão continua ativa."),
+    (SecondScreenNote, "Foi detetado um segundo ecrã — desativar a divisão não exige mudar de fonte."),
+    (NoSecondScreenNote, "Nenhum segundo ecrã detetado — desativar a divisão selecionará a fonte deste computador."),
+    (DisplaysUnknownNote, "Não foi possível verificar a lista de ecrãs — desativar a divisão usará a fonte deste computador."),
 
     // ── monitor feature labels and hints ────────────────────────────────
     (FnClockPhase, "Relógio / fase"),
@@ -270,10 +274,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (WriteMismatch, "O monitor não confirmou {} definições"),
     (WriteUnconfirmed, "Comando enviado — leitura de confirmação completa indisponível"),
     (WriteFailed, "Escrita interrompida: {}"),
-    (
-        ExperimentalMulti,
-        "Experimental: a seleção PiP/PbP, as pré-visualizações de disposição e a descodificação das fontes das janelas não foram totalmente verificadas. A leitura de confirmação verifica apenas os registos, não a imagem efetivamente apresentada.",
-    ),
+    (ExperimentalMulti, "A seleção PiP está indisponível: não há comando confirmado. PbP e os códigos de disposição são experimentais; a leitura não verifica a imagem real."),
     (
         PartialRead,
         "Não foi possível ler algumas definições. Os valores em falta não estão confirmados; atualize para tentar novamente.",

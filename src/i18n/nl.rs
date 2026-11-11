@@ -95,12 +95,9 @@ pub const ENTRIES: &[(Key, &str)] = &[
     ),
     (MvMode, "Modus"),
     (CardLayouts, "Vensterindeling"),
-    (LayoutHint, "Klik op een voorbeeld om de splitsing in te stellen. Het beeld kan flikkeren."),
+    (LayoutHint, "Experimentele codes, geen geometrievoorbeelden. Schrijven kan het beeld onderbreken; de gemarkeerde code komt alleen overeen met het uitgelezen register."),
     (CardWindowsShort, "Vensters"),
-    (
-        WindowsNote,
-        "De monitor bepaalt de volgorde van de bronnen in de vensters; hierboven ziet u de status die uit het apparaat is uitgelezen.",
-    ),
+    (WindowsNote, "In PBP worden beide bronnen in register 0x60 geschreven: links in de lage byte, rechts in de hoge byte. Wisselen is niet nodig — de rechterhelft wordt direct ingesteld."),
     (SourcesPreview, "Bronnen uitgelezen uit de monitor — alleen ter weergave."),
     (SourceFmt, "Bron: {}"),
     (InputUnknownFmt, "Ingang 0x{}"),
@@ -225,6 +222,13 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (ModeSingle, "Enkel"),
     (ModePip, "Beeld in beeld"),
     (ModePbp, "Twee beelden"),
+    (SelfSource, "Bron van deze computer"),
+    (SelfSourceHint, "Nodig om het beeld terug te laten keren op dit bureaublad wanneer de splitsing wordt uitgeschakeld."),
+    (SelfSourceUnknown, "Kan niet bepalen welke ingang deze computer gebruikt — selecteer deze hierboven."),
+    (ErrSelfSourceUnknown, "De bron van deze computer is niet geselecteerd; de splitsing blijft actief."),
+    (SecondScreenNote, "Een tweede scherm gedetecteerd — de splitsing uitschakelen vereist geen bronwijziging."),
+    (NoSecondScreenNote, "Geen tweede scherm gedetecteerd — de splitsing uitschakelen selecteert de bron van deze computer."),
+    (DisplaysUnknownNote, "Kon de schermlijst niet controleren — de splitsing uitschakelen gebruikt de bron van deze computer."),
 
     // ── monitor feature labels and hints ────────────────────────────────
     (FnClockPhase, "Klok / fase"),
@@ -270,10 +274,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (WriteMismatch, "De monitor heeft {} instellingen niet bevestigd"),
     (WriteUnconfirmed, "Opdracht verzonden — volledige controle-uitlezing niet beschikbaar"),
     (WriteFailed, "Schrijven onderbroken: {}"),
-    (
-        ExperimentalMulti,
-        "Experimenteel: de PiP/PbP-selectie, indelingsvoorbeelden en decodering van vensterbronnen zijn niet volledig geverifieerd. De controle-uitlezing bevestigt alleen de registers, niet het daadwerkelijke beeld op het scherm.",
-    ),
+    (ExperimentalMulti, "PiP-selectie is niet beschikbaar: geen bevestigd commando. PbP en indelingscodes blijven experimenteel; uitlezen verifieert het werkelijke beeld niet."),
     (
         PartialRead,
         "Sommige instellingen konden niet worden uitgelezen. Ontbrekende waarden zijn niet bevestigd; vernieuw om het opnieuw te proberen.",

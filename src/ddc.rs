@@ -175,13 +175,26 @@ pub fn capabilities(display: u32) -> Result<Capabilities, String> {
         return Err(with_reason(&out));
     }
 
+    let caps = parse_capabilities(&out.stdout);
+    if caps.features.is_empty() {
+        return Err("the monitor reported no features".to_string());
+    }
+    Ok(caps)
+}
+
+/// Parses the `ddcutil capabilities` output.
+///
+/// Some monitors repeat their value lists — the R45w-30 reports every input
+/// source twice (`60(0F 11 12 31 FF 0F 11 12 31)`) — so every list keeps only
+/// the first entry per code.
+fn parse_capabilities(text: &str) -> Capabilities {
     let mut caps = Capabilities::default();
     let mut current: Option<u8> = None;
     let mut in_values = false;
     let mut extra: std::collections::BTreeMap<u8, Vec<(u16, String)>> =
         std::collections::BTreeMap::new();
 
-    for line in out.stdout.lines() {
+    for line in text.lines() {
         let t = line.trim_start();
         if let Some(rest) = t.strip_prefix("Feature:") {
             in_values = false;
@@ -217,7 +230,9 @@ pub fn capabilities(display: u32) -> Result<Capabilities, String> {
                 });
             match parsed {
                 Some((code, label)) if current == Some(0x60) => {
-                    caps.inputs.push((code as u16, human_input(&label)))
+                    if !caps.inputs.iter().any(|(c, _)| *c == code as u16) {
+                        caps.inputs.push((code as u16, human_input(&label)));
+                    }
                 }
                 Some((code, label)) => {
                     if let Some(owner) = current {
@@ -233,11 +248,7 @@ pub fn capabilities(display: u32) -> Result<Capabilities, String> {
     }
 
     caps.values = extra.into_iter().collect();
-
-    if caps.features.is_empty() {
-        return Err("the monitor reported no features".to_string());
-    }
-    Ok(caps)
+    caps
 }
 
 fn with_reason(out: &Output) -> String {
@@ -495,6 +506,41 @@ pub fn human_input(raw: &str) -> String {
     }
 }
 
+/// Connector name for a VCP 0x60 input code.
+///
+/// `0x31` is USB-C on this monitor, but ddcutil does not know that code and
+/// reports it as "Unrecognized value".
+pub fn known_input(code: u16) -> Option<&'static str> {
+    Some(match code {
+        0x01 => "VGA",
+        0x03 => "DVI",
+        0x0f => "DisplayPort",
+        0x10 => "DisplayPort 2",
+        0x11 => "HDMI 1",
+        0x12 => "HDMI 2",
+        0x13 => "HDMI 3",
+        0x1f | 0x31 => "USB-C",
+        _ => return None,
+    })
+}
+
+/// Label of an input in the input list.
+///
+/// Our own connector names win, because ddcutil fills the value list with
+/// placeholders ("Unrecognized value") for codes it does not know. A real name
+/// reported by the monitor is the fallback; a code we cannot name is shown as
+/// a code, because a word like "unknown" among the connectors helps nobody.
+pub fn input_card_name(t: &Strings, code: u16, reported: &str) -> String {
+    if let Some(name) = known_input(code) {
+        return name.to_string();
+    }
+    let lower = reported.trim().to_lowercase();
+    if !lower.is_empty() && !lower.contains("unrecognized") && lower != "unknown" {
+        return human_input(reported);
+    }
+    t.fill(Key::InputUnknownFmt, &[format!("{code:02x}")])
+}
+
 /// Input name from the VCP code (when the monitor did not provide a list).
 ///
 /// Connector names (VGA, DVI, DisplayPort, HDMI, USB-C) are proper nouns and
@@ -503,23 +549,18 @@ pub fn input_name(t: &Strings, code: u16) -> String {
     match code {
         // 0x00 in the window register means "this window is not used".
         0x00 => "—".into(),
-        0x01 => "VGA".into(),
-        0x03 => "DVI".into(),
-        0x0f => "DisplayPort".into(),
-        0x10 => "DisplayPort 2".into(),
-        0x11 => "HDMI 1".into(),
-        0x12 => "HDMI 2".into(),
-        0x13 => "HDMI 3".into(),
-        0x1f => "USB-C".into(),
-        0x31 => "USB-C".into(),
         0xff => t.t(Key::InputUnknown).to_string(),
-        other => t.fill(Key::InputUnknownFmt, &[format!("{other:02x}")]),
+        other => known_input(other)
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| t.fill(Key::InputUnknownFmt, &[format!("{other:02x}")])),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_vcp_line, parse_verbose_line, VcpValue};
+    use super::{
+        input_card_name, parse_capabilities, parse_vcp_line, parse_verbose_line, VcpValue,
+    };
 
     fn assert_value(parsed: Option<(u8, VcpValue)>, expected: (u8, u16, u16)) {
         let (code, value) = parsed.expect("expected a valid VCP line");
@@ -661,5 +702,54 @@ mod tests {
         ] {
             assert!(parse_verbose_line(line).is_none(), "accepted {line:?}");
         }
+    }
+
+    /// The R45w-30 reports every input source twice and calls USB-C
+    /// "Unrecognized value".
+    const CAPABILITIES: &str = "\
+Model: Legion R45w-30
+VCP Features:
+   Feature: 10 (Brightness)
+   Feature: 60 (Input Source)
+      Values:
+         0f: DisplayPort-1
+         11: HDMI-1
+         12: HDMI-2
+         31: Unrecognized value
+         ff: Unrecognized value
+         0f: DisplayPort-1
+         11: HDMI-1
+         12: HDMI-2
+         31: Unrecognized value
+";
+
+    #[test]
+    fn capabilities_parsing_keeps_the_first_entry_per_input_code() {
+        let caps = parse_capabilities(CAPABILITIES);
+        let codes: Vec<u16> = caps.inputs.iter().map(|(code, _)| *code).collect();
+        assert_eq!(codes, vec![0x0f, 0x11, 0x12, 0x31, 0xff]);
+        assert_eq!(caps.inputs[0].1, "DisplayPort");
+        assert_eq!(caps.inputs[1].1, "HDMI 1");
+        assert_eq!(caps.inputs[2].1, "HDMI 2");
+    }
+
+    #[test]
+    fn input_cards_use_our_own_connector_names() {
+        let t = crate::i18n::strings(crate::i18n::Lang::En);
+        assert_eq!(input_card_name(&t, 0x31, "Unrecognized value"), "USB-C");
+        assert_eq!(input_card_name(&t, 0x0f, "DisplayPort-1"), "DisplayPort");
+        assert_eq!(input_card_name(&t, 0x11, "HDMI-1"), "HDMI 1");
+        assert_eq!(input_card_name(&t, 0x12, "HDMI-2"), "HDMI 2");
+    }
+
+    #[test]
+    fn input_cards_show_the_code_when_neither_we_nor_the_monitor_know_the_name() {
+        let t = crate::i18n::strings(crate::i18n::Lang::En);
+        assert_eq!(
+            input_card_name(&t, 0xff, "Unrecognized value"),
+            "Input 0xff"
+        );
+        // A real name from the monitor is kept.
+        assert_eq!(input_card_name(&t, 0x77, "HDMI-3"), "HDMI 3");
     }
 }

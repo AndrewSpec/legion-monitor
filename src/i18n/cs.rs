@@ -95,12 +95,9 @@ pub const ENTRIES: &[(Key, &str)] = &[
     ),
     (MvMode, "Režim"),
     (CardLayouts, "Rozložení oken"),
-    (LayoutHint, "Kliknutím na náhled nastavíte rozdělení. Obraz může zablikat."),
+    (LayoutHint, "Experimentální kódy, nikoli náhledy geometrie. Zápis může přerušit obraz; zvýrazněný kód odpovídá pouze načtenému registru."),
     (CardWindowsShort, "Okna"),
-    (
-        WindowsNote,
-        "Pořadí zdrojů v oknech určuje monitor; výše vidíte stav načtený ze zařízení.",
-    ),
+    (WindowsNote, "V režimu PBP se oba zdroje zapisují do registru 0x60: levý v nižším bajtu, pravý ve vyšším. Prohození není potřeba — pravá polovina se nastavuje přímo."),
     (SourcesPreview, "Zdroje načtené z monitoru — pouze náhled."),
     (SourceFmt, "Zdroj: {}"),
     (InputUnknownFmt, "Vstup 0x{}"),
@@ -225,6 +222,13 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (ModeSingle, "Jeden obraz"),
     (ModePip, "Obraz v obraze"),
     (ModePbp, "Dva obrazy"),
+    (SelfSource, "Zdroj tohoto počítače"),
+    (SelfSourceHint, "Potřebné, aby se obraz po vypnutí rozdělení vrátil na tuto plochu."),
+    (SelfSourceUnknown, "Nelze určit, který vstup tento počítač používá — vyberte jej výše."),
+    (ErrSelfSourceUnknown, "Zdroj tohoto počítače není vybrán; rozdělení zůstalo zapnuté."),
+    (SecondScreenNote, "Byla zjištěna druhá obrazovka — vypnutí rozdělení nevyžaduje změnu zdroje."),
+    (NoSecondScreenNote, "Nebyla zjištěna druhá obrazovka — vypnutí rozdělení vybere zdroj tohoto počítače."),
+    (DisplaysUnknownNote, "Seznam obrazovek se nepodařilo zkontrolovat — vypnutí rozdělení použije zdroj tohoto počítače."),
 
     // ── monitor feature labels and hints ────────────────────────────────
     (FnClockPhase, "Takt / fáze"),
@@ -270,10 +274,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (WriteMismatch, "Počet nastavení, která monitor nepotvrdil: {}"),
     (WriteUnconfirmed, "Příkaz odeslán — úplné kontrolní čtení není dostupné"),
     (WriteFailed, "Zápis přerušen: {}"),
-    (
-        ExperimentalMulti,
-        "Experimentální funkce: výběr PiP/PbP, náhledy rozložení a dekódování zdrojů oken nejsou plně ověřeny. Kontrolní čtení potvrzuje pouze registry, nikoli skutečný obraz na obrazovce.",
-    ),
+    (ExperimentalMulti, "Výběr PiP není dostupný: chybí potvrzený příkaz. PbP a kódy rozložení jsou experimentální; kontrolní čtení neověřuje skutečný obraz."),
     (
         PartialRead,
         "Některá nastavení se nepodařilo načíst. Chybějící hodnoty nejsou potvrzené; obnovte stav a zkuste to znovu.",

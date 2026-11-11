@@ -95,12 +95,9 @@ pub const ENTRIES: &[(Key, &str)] = &[
     ),
     (MvMode, "Modalità"),
     (CardLayouts, "Disposizione delle finestre"),
-    (LayoutHint, "Fai clic su un’anteprima per impostare la divisione. L’immagine potrebbe sfarfallare."),
+    (LayoutHint, "Codici sperimentali, non anteprime della geometria. La scrittura può interrompere l’immagine; il codice evidenziato corrisponde solo al registro riletto."),
     (CardWindowsShort, "Finestre"),
-    (
-        WindowsNote,
-        "Il monitor decide l’ordine delle sorgenti nelle finestre; sopra è mostrato lo stato letto dal dispositivo.",
-    ),
+    (WindowsNote, "In PBP entrambe le sorgenti si scrivono nel registro 0x60: la sinistra nel byte basso, la destra in quello alto. Non serve scambiarle: la metà destra si imposta direttamente."),
     (SourcesPreview, "Sorgenti lette dal monitor — solo anteprima."),
     (SourceFmt, "Sorgente: {}"),
     (InputUnknownFmt, "Ingresso 0x{}"),
@@ -225,6 +222,13 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (ModeSingle, "Singola"),
     (ModePip, "Immagine nell’immagine"),
     (ModePbp, "Due immagini"),
+    (SelfSource, "Sorgente di questo computer"),
+    (SelfSourceHint, "Necessaria per far tornare l'immagine su questo desktop quando la divisione viene disattivata."),
+    (SelfSourceUnknown, "Impossibile determinare quale ingresso usa questo computer — selezionalo sopra."),
+    (ErrSelfSourceUnknown, "La sorgente di questo computer non è selezionata; la divisione è rimasta attiva."),
+    (SecondScreenNote, "Rilevato un secondo schermo — disattivare la divisione non richiede di cambiare sorgente."),
+    (NoSecondScreenNote, "Nessun secondo schermo rilevato — disattivare la divisione selezionerà la sorgente di questo computer."),
+    (DisplaysUnknownNote, "Impossibile controllare l'elenco degli schermi — disattivare la divisione userà la sorgente di questo computer."),
 
     // ── monitor feature labels and hints ────────────────────────────────
     (FnClockPhase, "Clock / fase"),
@@ -270,10 +274,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (WriteMismatch, "Il monitor non ha confermato {} impostazioni"),
     (WriteUnconfirmed, "Comando inviato — rilettura completa non disponibile"),
     (WriteFailed, "Scrittura interrotta: {}"),
-    (
-        ExperimentalMulti,
-        "Sperimentale: la selezione PiP/PbP, le anteprime delle disposizioni e la decodifica delle sorgenti delle finestre non sono state completamente verificate. La rilettura conferma solo i registri, non l’immagine effettivamente visualizzata.",
-    ),
+    (ExperimentalMulti, "Selezione PiP non disponibile: nessun comando confermato. PbP e i codici di disposizione restano sperimentali; la rilettura non verifica l’immagine reale."),
     (
         PartialRead,
         "Non è stato possibile leggere alcune impostazioni. I valori mancanti non sono confermati; aggiorna per riprovare.",

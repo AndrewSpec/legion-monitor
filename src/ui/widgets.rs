@@ -66,7 +66,7 @@ pub(crate) fn chip(ui: &mut Ui, text: &str, color: Color32) {
     p.galley(rect.center() - galley.size() / 2.0, galley, color);
 }
 
-pub(crate) fn segmented(ui: &mut Ui, current: usize, items: &[&str]) -> Option<usize> {
+pub(crate) fn segmented(ui: &mut Ui, current: usize, items: &[(&str, bool)]) -> Option<usize> {
     let mut chosen = None;
     Frame::NONE
         .fill(BG)
@@ -74,7 +74,7 @@ pub(crate) fn segmented(ui: &mut Ui, current: usize, items: &[&str]) -> Option<u
         .inner_margin(Margin::same(4))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (i, item) in items.iter().enumerate() {
+                for (i, (item, enabled)) in items.iter().enumerate() {
                     let selected = i == current;
                     let galley = ui.painter().layout_no_wrap(
                         item.to_string(),
@@ -82,7 +82,12 @@ pub(crate) fn segmented(ui: &mut Ui, current: usize, items: &[&str]) -> Option<u
                         if selected { Color32::WHITE } else { DIM },
                     );
                     let size = Vec2::new(galley.size().x + 26.0, 30.0);
-                    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+                    let (rect, resp) = ui
+                        .add_enabled_ui(*enabled, |ui| ui.allocate_exact_size(size, Sense::click()))
+                        .inner;
+                    #[cfg(test)]
+                    ui.ctx()
+                        .data_mut(|d| d.insert_temp(egui::Id::new(("test-mode-rect", i)), rect));
                     let bg = if selected {
                         ACCENT
                     } else if resp.hovered() {
@@ -98,7 +103,7 @@ pub(crate) fn segmented(ui: &mut Ui, current: usize, items: &[&str]) -> Option<u
                         galley,
                         Color32::WHITE,
                     );
-                    if resp.clicked() && !selected {
+                    if *enabled && resp.clicked() && !selected {
                         chosen = Some(i);
                     }
                 }
@@ -173,18 +178,9 @@ pub(crate) fn input_card(ui: &mut Ui, t: &Strings, name: &str, active: bool) -> 
     resp
 }
 
-/// Name of a window layout in the selected language.
-pub(crate) fn layout_title(t: &Strings, value: u16) -> &'static str {
-    t.t(match value {
-        0x0101 => Key::L101,
-        0x0102 => Key::L102,
-        0x0201 => Key::L201,
-        0x0202 => Key::L202,
-        0x0301 => Key::L301,
-        0x0302 => Key::L302,
-        0x0401 => Key::L401,
-        _ => Key::L402,
-    })
+/// A protocol candidate, not a claim about the physical screen geometry.
+pub(crate) fn layout_title(t: &Strings, value: u16) -> String {
+    format!("{} · {value:04X}", t.t(Key::FnWindowLayout))
 }
 
 pub(crate) fn layout_tile(
@@ -211,22 +207,14 @@ pub(crate) fn layout_tile(
         Stroke::new(1.2_f32, if selected { ACCENT } else { BORDER }),
         StrokeKind::Inside,
     );
-    let inner = rect.shrink2(Vec2::new(14.0, 12.0));
-    for pane in layout.panes {
-        let pane_rect = Rect::from_min_size(
-            inner.min + Vec2::new(pane.0 * inner.width(), pane.1 * inner.height()),
-            Vec2::new(pane.2 * inner.width() - 4.0, pane.3 * inner.height() - 4.0),
-        );
-        p.rect_filled(
-            pane_rect,
-            CornerRadius::same(3),
-            if selected {
-                ACCENT.gamma_multiply(0.75)
-            } else {
-                Color32::from_rgb(0x3c, 0x44, 0x54)
-            },
-        );
-    }
+    // No invented pane diagram: the register value does not prove geometry.
+    p.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        format!("{:04X}", layout.value),
+        FontId::monospace(20.0),
+        if selected { ACCENT } else { DIM },
+    );
     ui.painter().text(
         Pos2::new(outer.center().x, outer.bottom() - 8.0),
         Align2::CENTER_BOTTOM,

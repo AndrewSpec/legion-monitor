@@ -101,15 +101,9 @@ pub const ENTRIES: &[(Key, &str)] = &[
     ),
     (MvMode, "Tryb"),
     (CardLayouts, "Układ okien"),
-    (
-        LayoutHint,
-        "Kliknij podgląd, aby ustawić podział. Obraz może mrugnąć.",
-    ),
+    (LayoutHint, "Kody eksperymentalne, nie podglądy geometrii. Zapis może przerwać obraz; wyróżniony kod odpowiada tylko odczytowi rejestru."),
     (CardWindowsShort, "Okna"),
-    (
-        WindowsNote,
-        "Kolejność źródeł w oknach ustawia monitor; powyżej widać stan odczytany z urządzenia.",
-    ),
+    (WindowsNote, "W trybie PBP oba źródła zapisuje się jednym rejestrem 0x60: lewe w młodszym bajcie, prawe w starszym. Zamiana źródeł nie jest potrzebna — prawa połowa ustawia się bezpośrednio."),
     (SourcesPreview, "Źródła odczytane z monitora — tylko podgląd."),
     (SourceFmt, "Źródło: {}"),
     (InputUnknownFmt, "Wejście 0x{}"),
@@ -240,6 +234,13 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (ModeSingle, "Pojedynczy"),
     (ModePip, "Obraz w obrazie"),
     (ModePbp, "Dwa obrazy"),
+    (SelfSource, "Źródło tego komputera"),
+    (SelfSourceHint, "Wymagane, żeby po wyłączeniu podziału obraz wrócił na ten pulpit."),
+    (SelfSourceUnknown, "Nie wiadomo, przez które źródło jest podłączony ten komputer — wybierz je powyżej."),
+    (ErrSelfSourceUnknown, "Nie wybrano źródła tego komputera; podział nie został wyłączony."),
+    (SecondScreenNote, "Wykryto drugi ekran — wyłączenie podziału nie wymaga zmiany źródła."),
+    (NoSecondScreenNote, "Nie wykryto drugiego ekranu — wyłączenie podziału ustawi źródło tego komputera."),
+    (DisplaysUnknownNote, "Nie udało się sprawdzić listy ekranów — wyłączenie podziału użyje źródła tego komputera."),
 
     // ── monitor feature labels and hints ────────────────────────────────
     (FnClockPhase, "Zegar / faza"),
@@ -285,10 +286,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (WriteMismatch, "Monitor nie potwierdził {} ustawień"),
     (WriteUnconfirmed, "Wysłano polecenie — pełny odczyt kontrolny niedostępny"),
     (WriteFailed, "Zapis przerwany: {}"),
-    (
-        ExperimentalMulti,
-        "Funkcje eksperymentalne: wybór PiP/PbP, podglądy układów i dekodowanie źródeł okien nie zostały w pełni zweryfikowane. Odczyt kontrolny potwierdza jedynie rejestry, a nie rzeczywisty obraz na ekranie.",
-    ),
+    (ExperimentalMulti, "Wybór PiP jest niedostępny: brak potwierdzonego polecenia. PbP i kody układów są eksperymentalne; odczyt nie potwierdza rzeczywistego obrazu."),
     (
         PartialRead,
         "Nie udało się odczytać części ustawień. Brakujące wartości nie są potwierdzone; odśwież, aby spróbować ponownie.",

@@ -6,6 +6,7 @@ impl App {
 
         let mode = self.multi_mode();
         let input = self.value(0x60);
+        let pair = self.split_pair();
         let bright = self.value(0x10);
         let contrast = self.value(0x12);
 
@@ -16,9 +17,22 @@ impl App {
                 stat(
                     ui,
                     self.t(Key::OvSource),
-                    &input
-                        .map(|c| self.input_name_of(c))
-                        .unwrap_or_else(|| "—".into()),
+                    &match (mode, pair) {
+                        // In a split 0x60 is a pair, not a single input code.
+                        (
+                            MultiMode::PictureInPicture | MultiMode::PictureByPicture,
+                            Some((left, right)),
+                        ) => {
+                            format!(
+                                "{} / {}",
+                                self.input_name_of(left),
+                                self.input_name_of(right)
+                            )
+                        }
+                        _ => input
+                            .map(|c| self.input_name_of(c))
+                            .unwrap_or_else(|| "—".into()),
+                    },
                 );
                 ui.add_space(30.0);
                 stat(
@@ -97,19 +111,13 @@ impl App {
             self.multi_mode(),
             MultiMode::PictureInPicture | MultiMode::PictureByPicture
         );
-        match catalog::window_sources(self.value(0xf0)).filter(|_| split) {
+        match self.split_pair().filter(|_| split) {
             Some((left, right)) => {
                 ui.horizontal(|ui| {
                     stat(ui, self.t(Key::WindowLeft), &self.input_name_of(left));
                     ui.add_space(24.0);
                     stat(ui, self.t(Key::WindowRight), &self.input_name_of(right));
                 });
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new(self.t(Key::WindowsUnknown))
-                        .size(11.0)
-                        .color(FAINT),
-                );
             }
             None => {
                 ui.label(
@@ -133,9 +141,9 @@ impl App {
             MultiMode::Unknown => 3,
         };
         let items = [
-            self.t(Key::ModeSingle),
-            self.t(Key::ModePip),
-            self.t(Key::ModePbp),
+            (self.t(Key::ModeSingle), true),
+            (self.t(Key::ModePip), false),
+            (self.t(Key::ModePbp), true),
         ];
         let selected = ui
             .add_enabled_ui(!self.busy && matches!(self.conn, Conn::Ok(_)), |ui| {
@@ -145,17 +153,54 @@ impl App {
         if let Some(i) = selected {
             match i {
                 0 => {
-                    self.send(Cmd::Apply(vec![(0xf2, 0)]));
+                    // Lenovo's SetPIPPBPState closes the split with 0xA5 = 0.
+                    // Without a second screen the monitor must return to the
+                    // input this computer is on; with one, the user can fix a
+                    // wrong input on that screen.
+                    self.win_sources = [0, 0];
+                    let second = self.displays.has_second_screen();
+                    let source = if second { None } else { self.self_source };
+                    if !second && source.is_none() {
+                        self.toast = Some((
+                            self.t(Key::ErrSelfSourceUnknown).to_string(),
+                            true,
+                            Instant::now(),
+                        ));
+                    } else {
+                        let pbp = self.multi_mode() == MultiMode::PictureByPicture;
+                        self.send(Cmd::DisableMultiView { source, pbp });
+                    }
                 }
-                1 => {
-                    // PiP: enable multi-view; the monitor keeps its layout.
-                    self.send(Cmd::Apply(vec![(0xf2, 1)]));
+                2 => {
+                    let layout = self
+                        .value(0xf5)
+                        .filter(|v| catalog::layout_for(*v).is_some())
+                        .unwrap_or(0x0101);
+                    // The old pair may belong to PIP or to a previous split;
+                    // the readback after SetPbp fills in the real one.
+                    self.win_sources = [0, 0];
+                    self.send(Cmd::SetPbp {
+                        layout: Some(layout),
+                    });
                 }
-                _ => {
-                    let layout = self.value(0xf5).filter(|v| *v != 0).unwrap_or(0x0101);
-                    self.send(Cmd::Apply(vec![(0xf5, layout), (0xf2, 1)]));
-                }
+                _ => {} // No established command for selecting PiP.
             }
+        }
+        if matches!(
+            self.multi_mode(),
+            MultiMode::PictureInPicture | MultiMode::PictureByPicture
+        ) {
+            ui.add_space(10.0);
+            self.self_source_row(ui);
+            ui.add_space(4.0);
+            let note = if !self.displays.known {
+                Key::DisplaysUnknownNote
+            } else if self.displays.has_second_screen() {
+                Key::SecondScreenNote
+            } else {
+                Key::NoSecondScreenNote
+            };
+            ui.label(RichText::new(self.t(note)).size(11.0).color(FAINT));
         }
         ui.add_space(6.0);
         ui.label(

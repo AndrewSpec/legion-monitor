@@ -8,6 +8,7 @@ mod ddc;
 mod i18n;
 mod profiles;
 mod settings;
+mod topology;
 mod ui;
 mod worker;
 

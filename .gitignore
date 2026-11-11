@@ -1,2 +1,6 @@
 /target/
 *.log
+
+# Local hardware verification notes; only the README screenshot is published.
+/docs/*
+!/docs/screenshot.png

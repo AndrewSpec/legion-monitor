@@ -122,9 +122,13 @@ pub fn replay_plan(values: &BTreeMap<String, u16>) -> Vec<(u8, u16)> {
         })
         .collect();
     list.sort_by_key(|(c, _)| match c {
-        0xf5 => 0x100,
-        0xf2 => 0x101,
-        0x60 => 0x102,
+        // Temperature/RGB writes can change the preset as a side effect.
+        // Restore the requested preset last among picture controls; readback
+        // must still reject tuples that the monitor cannot represent together.
+        0x14 => 0x100,
+        0xf5 => 0x101,
+        0xf2 => 0x102,
+        0x60 => 0x103,
         _ => *c as u16,
     });
     list
@@ -187,6 +191,36 @@ mod tests {
         assert_eq!(
             replay_plan(&values),
             vec![(0x12, 87), (0xf5, 257), (0xf2, 1), (0x60, 49)]
+        );
+    }
+
+    #[test]
+    fn replay_restores_color_preset_after_temperature_and_rgb() {
+        let values = [
+            ("14", 8),
+            ("0C", 63),
+            ("16", 100),
+            ("18", 90),
+            ("1A", 87),
+            ("F5", 257),
+            ("F2", 1),
+            ("60", 49),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.into(), v))
+        .collect();
+        assert_eq!(
+            replay_plan(&values),
+            vec![
+                (0x0c, 63),
+                (0x16, 100),
+                (0x18, 90),
+                (0x1a, 87),
+                (0x14, 8),
+                (0xf5, 257),
+                (0xf2, 1),
+                (0x60, 49)
+            ]
         );
     }
 

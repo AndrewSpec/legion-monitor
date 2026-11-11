@@ -95,12 +95,9 @@ pub const ENTRIES: &[(Key, &str)] = &[
     ),
     (MvMode, "Mode"),
     (CardLayouts, "Disposition des fenêtres"),
-    (LayoutHint, "Cliquez sur un aperçu pour définir le partage. L’image peut scintiller."),
+    (LayoutHint, "Codes expérimentaux, pas des aperçus de géométrie. Une écriture peut interrompre l’image ; le code surligné correspond uniquement au registre relu."),
     (CardWindowsShort, "Fenêtres"),
-    (
-        WindowsNote,
-        "Le moniteur détermine l’ordre des sources dans les fenêtres ; l’état lu sur l’appareil est affiché ci-dessus.",
-    ),
+    (WindowsNote, "En PBP, les deux sources s'écrivent dans le registre 0x60 : la gauche dans l'octet bas, la droite dans l'octet haut. Aucun échange n'est nécessaire — la moitié droite se règle directement."),
     (SourcesPreview, "Sources lues sur le moniteur — aperçu uniquement."),
     (SourceFmt, "Source : {}"),
     (InputUnknownFmt, "Entrée 0x{}"),
@@ -225,6 +222,13 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (ModeSingle, "Unique"),
     (ModePip, "Image dans l’image"),
     (ModePbp, "Deux images"),
+    (SelfSource, "Source de cet ordinateur"),
+    (SelfSourceHint, "Nécessaire pour que l'image revienne sur ce bureau lorsque la division est désactivée."),
+    (SelfSourceUnknown, "Impossible de déterminer l'entrée utilisée par cet ordinateur — sélectionnez-la ci-dessus."),
+    (ErrSelfSourceUnknown, "La source de cet ordinateur n'est pas sélectionnée ; la division reste active."),
+    (SecondScreenNote, "Un second écran a été détecté — désactiver la division ne nécessite pas de changer de source."),
+    (NoSecondScreenNote, "Aucun second écran détecté — désactiver la division sélectionnera la source de cet ordinateur."),
+    (DisplaysUnknownNote, "Impossible de vérifier la liste des écrans — désactiver la division utilisera la source de cet ordinateur."),
 
     // ── monitor feature labels and hints ────────────────────────────────
     (FnClockPhase, "Horloge / phase"),
@@ -270,10 +274,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (WriteMismatch, "Le moniteur n’a pas confirmé {} paramètres"),
     (WriteUnconfirmed, "Commande envoyée — relecture complète indisponible"),
     (WriteFailed, "Écriture interrompue : {}"),
-    (
-        ExperimentalMulti,
-        "Expérimental : la sélection PiP/PbP, les aperçus de disposition et le décodage des sources des fenêtres ne sont pas entièrement vérifiés. La relecture confirme uniquement les registres, pas l’image réellement affichée.",
-    ),
+    (ExperimentalMulti, "La sélection PiP est indisponible : aucune commande confirmée. PbP et les codes de disposition restent expérimentaux ; la relecture ne vérifie pas l’image réelle."),
     (
         PartialRead,
         "Certains paramètres n’ont pas pu être lus. Les valeurs manquantes ne sont pas confirmées ; actualisez pour réessayer.",

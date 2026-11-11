@@ -95,12 +95,9 @@ pub const ENTRIES: &[(Key, &str)] = &[
     ),
     (MvMode, "Modo"),
     (CardLayouts, "Distribución de ventanas"),
-    (LayoutHint, "Haz clic en una vista previa para establecer la división. La imagen puede parpadear."),
+    (LayoutHint, "Códigos experimentales, no vistas previas de geometría. La escritura puede interrumpir la imagen; el código resaltado solo coincide con la lectura del registro."),
     (CardWindowsShort, "Ventanas"),
-    (
-        WindowsNote,
-        "El monitor decide el orden de las fuentes en las ventanas; arriba se muestra el estado leído del dispositivo.",
-    ),
+    (WindowsNote, "En PBP ambas fuentes se escriben en el registro 0x60: la izquierda en el byte bajo y la derecha en el alto. No hace falta intercambiar: la mitad derecha se ajusta directamente."),
     (SourcesPreview, "Fuentes leídas del monitor — solo vista previa."),
     (SourceFmt, "Fuente: {}"),
     (InputUnknownFmt, "Entrada 0x{}"),
@@ -225,6 +222,13 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (ModeSingle, "Única"),
     (ModePip, "Imagen en imagen"),
     (ModePbp, "Dos imágenes"),
+    (SelfSource, "Fuente de este equipo"),
+    (SelfSourceHint, "Necesaria para que la imagen vuelva a este escritorio al desactivar la división."),
+    (SelfSourceUnknown, "No se puede determinar qué entrada usa este equipo; selecciónala arriba."),
+    (ErrSelfSourceUnknown, "No se ha seleccionado la fuente de este equipo; la división sigue activa."),
+    (SecondScreenNote, "Se ha detectado una segunda pantalla; desactivar la división no requiere cambiar la fuente."),
+    (NoSecondScreenNote, "No se ha detectado una segunda pantalla; al desactivar la división se seleccionará la fuente de este equipo."),
+    (DisplaysUnknownNote, "No se pudo comprobar la lista de pantallas; al desactivar la división se usará la fuente de este equipo."),
 
     // ── monitor feature labels and hints ────────────────────────────────
     (FnClockPhase, "Reloj / fase"),
@@ -270,10 +274,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (WriteMismatch, "El monitor no ha confirmado {} ajustes"),
     (WriteUnconfirmed, "Comando enviado — lectura de comprobación completa no disponible"),
     (WriteFailed, "Escritura interrumpida: {}"),
-    (
-        ExperimentalMulti,
-        "Experimental: la selección de PiP/PbP, las vistas previas de distribución y la decodificación de las fuentes de las ventanas no se han verificado por completo. La lectura de comprobación solo confirma los registros, no la imagen real en pantalla.",
-    ),
+    (ExperimentalMulti, "La selección PiP no está disponible: no hay un comando confirmado. PbP y los códigos de distribución son experimentales; la lectura no verifica la imagen real."),
     (
         PartialRead,
         "No se han podido leer algunos ajustes. Los valores ausentes no están confirmados; actualiza para volver a intentarlo.",
