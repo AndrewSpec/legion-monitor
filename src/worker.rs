@@ -405,10 +405,48 @@ impl Worker {
                                 }
                             }
 
-                            // Place the rectangle before selecting the PIP
-                            // window. The monitor accepts and reports 0x95..0x98
-                            // in single mode, so a failed selector cannot leave
-                            // a split with a zero rectangle.
+                            // The monitor does not open PIP from A5 alone. On
+                            // the test unit F2 stayed zero until F2=1 was
+                            // written, so open the window explicitly and verify
+                            // it before touching the source.
+                            if failure.is_none() && stopped.is_none() {
+                                let mut mode = ddc::read(m.display, &[0xf2])
+                                    .get(&0xf2)
+                                    .map(|v| v.value);
+                                if mode
+                                    .map(|value| catalog::multi_mode(Some(value)))
+                                    != Some(MultiMode::PictureInPicture)
+                                {
+                                    write_log(&etx, 0xf2, 1);
+                                    if let Err(e) = ddc::set(m.display, 0xf2, 1) {
+                                        let _ = etx.send(Ev::Log(LogLine::Text(e)));
+                                    }
+                                    settle();
+                                    for attempt in 0..3 {
+                                        mode = ddc::read(m.display, &[0xf2])
+                                            .get(&0xf2)
+                                            .map(|v| v.value);
+                                        if mode.map(|value| {
+                                            catalog::multi_mode(Some(value))
+                                        }) == Some(MultiMode::PictureInPicture)
+                                        {
+                                            break;
+                                        }
+                                        if attempt < 2 {
+                                            thread::sleep(Duration::from_millis(300));
+                                        }
+                                    }
+                                }
+                                match mode.map(|value| catalog::multi_mode(Some(value))) {
+                                    Some(MultiMode::PictureInPicture) => {}
+                                    Some(_) => stopped = Some(Key::WriteMismatch),
+                                    None => stopped = Some(Key::WriteUnconfirmed),
+                                }
+                            }
+                            // Place the rectangle after the window is open. Opening PIP
+                            // resets 0x95..0x98 to the default top-right corner
+                            // on this unit, so writing them earlier only made
+                            // that one corner work.
                             if failure.is_none() && stopped.is_none() {
                                 for &(code, value) in &pip_rect_plan(corner) {
                                     write_log(&etx, code, value);
@@ -463,44 +501,6 @@ impl Worker {
                                 match rect_seen {
                                     Some(true) => {}
                                     Some(false) => stopped = Some(Key::WriteMismatch),
-                                    None => stopped = Some(Key::WriteUnconfirmed),
-                                }
-                            }
-                            // The monitor does not open PIP from A5 alone. On
-                            // the test unit F2 stayed zero until F2=1 was
-                            // written, so open the window explicitly and verify
-                            // it before touching the source.
-                            if failure.is_none() && stopped.is_none() {
-                                let mut mode = ddc::read(m.display, &[0xf2])
-                                    .get(&0xf2)
-                                    .map(|v| v.value);
-                                if mode
-                                    .map(|value| catalog::multi_mode(Some(value)))
-                                    != Some(MultiMode::PictureInPicture)
-                                {
-                                    write_log(&etx, 0xf2, 1);
-                                    if let Err(e) = ddc::set(m.display, 0xf2, 1) {
-                                        let _ = etx.send(Ev::Log(LogLine::Text(e)));
-                                    }
-                                    settle();
-                                    for attempt in 0..3 {
-                                        mode = ddc::read(m.display, &[0xf2])
-                                            .get(&0xf2)
-                                            .map(|v| v.value);
-                                        if mode.map(|value| {
-                                            catalog::multi_mode(Some(value))
-                                        }) == Some(MultiMode::PictureInPicture)
-                                        {
-                                            break;
-                                        }
-                                        if attempt < 2 {
-                                            thread::sleep(Duration::from_millis(300));
-                                        }
-                                    }
-                                }
-                                match mode.map(|value| catalog::multi_mode(Some(value))) {
-                                    Some(MultiMode::PictureInPicture) => {}
-                                    Some(_) => stopped = Some(Key::WriteMismatch),
                                     None => stopped = Some(Key::WriteUnconfirmed),
                                 }
                             }

@@ -72,7 +72,10 @@ A quarter-screen window is therefore:
 | Bottom right | 2560 | 720 | 5120 | 1440 |
 
 Writing these values while the monitor is still in single mode succeeds and
-reads back exactly. The rectangle can therefore be staged before opening the
+reads back exactly. The rectangle must be written **after** opening PIP with
+`F2 = 1`: opening resets it to the default top-right quadrant, so staging it
+before opening only ever produced the top-right corner. It can be read before
+opening, but
 PIP window, which avoids leaving the monitor in a split with an unplaced window
 if a later write fails.
 

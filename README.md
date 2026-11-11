@@ -335,9 +335,11 @@ writes `0xA5 = 0x0200`, an optional `0xF5` layout repair and then both sources i
 one `0x60` write. Opening PIP from True Split first runs the full single-picture
 exit below, then reads `0xF2` and refuses to continue while the monitor still
 reports a split (`F2` zero = single, bit 1 = True Split, otherwise PIP). Only
-then it writes `0x95`–`0x98` in panel pixels while the monitor is still single,
-opens the window with `0xF2 = 1` (the test unit ignores `0xA5 = 0x0100` until
-`F2` is written), verifies `0xF2` reports PIP, and only then writes `0x60`. It
+then it opens the window with `0xF2 = 1` (the test unit ignores
+`0xA5 = 0x0100` until `F2` is written), verifies `0xF2` reports PIP, and writes
+`0x95`–`0x98` in panel pixels only after opening. Opening PIP resets the
+rectangle to the top-right default, which is why an earlier order that staged
+the rectangle first only ever produced that corner. It
 writes the selected source while the main window is selected and then writes the
 app input back, because the monitor displays the other input in the quarter.
 skipped, so the main picture cannot go black. If the source differs from the
@@ -392,7 +394,7 @@ Longer session notes, including safe write sequences and failure modes, are in
 | True Split layout | `0xF5` | Write and readback observed | Lenovo calls it *PBP Control*: low byte = position (`1` right, `2` left, `3` top, `4` bottom), high byte = ratio (`1` 1:1, `2` 2:1, `3` 1:2, `4` 3:1). On the R45w-30 only `0x0101` (50/50) and `0x0401` (about 70/30) change the picture; the UI offers only those two |
 | Mode | `0xF2` | Read and write observed | Current value: `0x0000` single, `0x0100` PIP, `0x0101` PIP with the pictures swapped, `0x0103` True Split. Bit 1 marks True Split; bit 0 is the swap flag. Writes: `0` closes PIP/PBP, `1` swaps. `0xF4` is only a window mirror and can stay `0x0100` after the split closes |
 | Window mask | `0xA4` | Static analysis of Lenovo's `SetPIPWndRect`; write rejected on the R45w-30 | `0` hides the PIP window while it is moved, `0xFFFF` shows it again in Lenovo's code. The monitor rejected the show write in our path, and a mask left at `0` blanks the whole picture, so the application does not touch `0xA4` |
-| PIP window rectangle | `0x95`–`0x98` | Static analysis of Lenovo's `SetPIPWndRect`; VCP ranges read on the R45w-30 | Left, top, right and bottom in **panel pixels**: the R45w-30 reports maxima 4960/1320/5120/1440 for a 5120×1440 panel, so the app writes a half-size quadrant such as `(2560, 0, 5120, 720)`. The application writes `0x95`, `0x96`, `0x97`, `0x98` while the monitor is still single, verifies the readback, and only then selects the window with `0xA5 = 0x0100`; `GetPIPWndRect` reads the same four codes. Writing `0..100` here made a 100-pixel window and is the bug behind the first PIP attempt |
+| PIP window rectangle | `0x95`–`0x98` | Static analysis of Lenovo's `SetPIPWndRect`; VCP ranges read on the R45w-30 | Left, top, right and bottom in **panel pixels**: the R45w-30 reports maxima 4960/1320/5120/1440 for a 5120×1440 panel, so the app writes a half-size quadrant such as `(2560, 0, 5120, 720)`. The application opens PIP with `F2 = 1`, then writes `0x95`, `0x96`, `0x97`, `0x98` and verifies the readback; writing them before opening only produced the default top-right corner because opening resets the rectangle. `GetPIPWndRect` reads the same four codes. Writing `0..100` here made a 100-pixel window and is the bug behind the first PIP attempt |
 | Window selection | `0xA5` | Write and readback observed | Lenovo calls it *Window Select*: `0x0000` closes PIP/PBP, `0x0100` selects the PIP window, `0x0200` the PBP window. The monitor never reads the selection back |
 | Window inputs | `0xF0` | Read in the examined path | Lenovo calls it *Audio Source*; on the R45w-30 it reports the two window sources (low byte = left window, high byte = right) but is unreadable most of the time (`0xFFFF`) |
 | Input source | `0x60` | Read/write control | `0x0f` DP, `0x11` HDMI 1, `0x12` HDMI 2, `0x31` USB-C. Outside a split it takes one source byte. In PBP Lenovo writes the whole pair as `(right << 8) | left`; that is the direct way to set the right half, with no `0xA5` selector and no `0xF2` exchange. `0xA5 = 0x0200` was verified on the R45w-30; `0xA5 = 0x0100` in PBP froze the monitor's OSD |
