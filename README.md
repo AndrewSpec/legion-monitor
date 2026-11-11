@@ -1,6 +1,7 @@
 # legion-monitor
 
 [![CI](https://github.com/AndrewSpec/legion-monitor/actions/workflows/ci.yml/badge.svg)](https://github.com/AndrewSpec/legion-monitor/actions/workflows/ci.yml)
+[![Release](https://github.com/AndrewSpec/legion-monitor/actions/workflows/release.yml/badge.svg)](https://github.com/AndrewSpec/legion-monitor/actions/workflows/release.yml)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue.svg)](LICENSE)
 
 <img src="assets/icon.png" width="88" align="right" alt="Legion Monitor icon">
