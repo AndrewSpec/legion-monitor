@@ -127,6 +127,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (Split7030, "70 / 30"),
     (CardPip, "Picture in picture"),
     (PipHint, "The second picture takes a quarter of the screen. Pick the corner it should sit in."),
+    (PipNeeds60Fmt, "Picture-in-picture needs a 60 Hz link. The monitor is running at {} Hz — lower the refresh rate in the system display settings first."),
     (PipCornerTopLeft, "Top left"),
     (PipCornerTopRight, "Top right"),
     (PipCornerBottomLeft, "Bottom left"),

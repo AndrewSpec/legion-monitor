@@ -288,6 +288,13 @@ pub(crate) fn pip_tile(
     );
 
     caption(ui, outer, corner.key(), selected, t);
+    if !ui.is_enabled() {
+        // Custom-painted widgets keep their colours inside a disabled Ui, so
+        // the tile would look clickable. A translucent veil marks it as off;
+        // `ui.multiply_opacity` would also dim every later widget.
+        ui.painter()
+            .rect_filled(outer, CornerRadius::same(10), BG.gamma_multiply(0.55));
+    }
     resp.on_hover_text(format!("{} · {}", t.t(Key::ModePip), t.t(corner.key())))
 }
 

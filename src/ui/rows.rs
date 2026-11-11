@@ -368,6 +368,7 @@ mod tests {
                 known: true,
                 second_screen,
                 output_size: None,
+                refresh_hz: None,
             };
             app.self_source = Some(0x31);
             let ctx = egui::Context::default();
@@ -389,6 +390,7 @@ mod tests {
             known: true,
             second_screen: false,
             output_size: None,
+            refresh_hz: None,
         };
         app.self_source = Some(0x31);
         // The desktop is on HDMI 1 even though the saved self-source says USB-C.
@@ -424,6 +426,41 @@ mod tests {
     }
 
     #[test]
+    fn pip_is_refused_above_sixty_hertz() {
+        let (mut app, commands) = app_for_test();
+        app.displays = crate::topology::Displays {
+            known: true,
+            second_screen: false,
+            output_size: None,
+            refresh_hz: Some(165.0),
+        };
+        app.self_source = Some(0x31);
+        app.enter_pip(catalog::PipCorner::TopRight);
+        assert!(
+            commands.try_recv().is_err(),
+            "a 165 Hz link must not start PIP"
+        );
+        let (note, error, _) = app.toast.clone().expect("the refusal is explained");
+        assert!(error);
+        assert!(note.contains("165"), "unexpected note: {note}");
+    }
+
+    #[test]
+    fn pip_allows_a_sixty_hertz_link() {
+        let (mut app, commands) = app_for_test();
+        app.displays = crate::topology::Displays {
+            known: true,
+            second_screen: false,
+            output_size: None,
+            // Display servers report 59.98 Hz for a 60 Hz mode.
+            refresh_hz: Some(59.98),
+        };
+        app.self_source = Some(0x31);
+        app.enter_pip(catalog::PipCorner::TopRight);
+        assert!(matches!(commands.try_recv().unwrap(), Cmd::ApplyPip { .. }));
+    }
+
+    #[test]
     fn mode_clicks_send_the_expected_command_and_respect_busy_offline() {
         for (busy, connected) in [(false, true), (true, true), (false, false)] {
             for target in 0..3 {
@@ -445,6 +482,7 @@ mod tests {
                     known: true,
                     second_screen: false,
                     output_size: None,
+                    refresh_hz: None,
                 };
                 app.self_source = Some(0x31);
                 let ctx = egui::Context::default();
@@ -534,6 +572,7 @@ mod tests {
             known: true,
             second_screen: false,
             output_size: None,
+            refresh_hz: None,
         };
         app.self_source = None;
 

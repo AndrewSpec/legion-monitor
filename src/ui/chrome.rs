@@ -181,6 +181,11 @@ impl App {
         for section in Section::ALL {
             if nav_item(ui, section, self.section == section, &self.tr) {
                 self.section = section;
+                // PIP depends on the desktop refresh rate, which the user can
+                // change without restarting the application.
+                if matches!(section, Section::Overview | Section::MultiView) {
+                    self.scan_displays();
+                }
             }
             ui.add_space(2.0);
         }

@@ -127,6 +127,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (Split7030, "70 / 30"),
     (CardPip, "Beeld in beeld"),
     (PipHint, "Het tweede beeld neemt een kwart van het scherm in. Kies de hoek waar het moet staan."),
+    (PipNeeds60Fmt, "Beeld in beeld vereist een 60 Hz-verbinding. De monitor draait op {} Hz — verlaag eerst de vernieuwingsfrequentie in de beeldscherminstellingen van het systeem."),
     (PipCornerTopLeft, "Linksboven"),
     (PipCornerTopRight, "Rechtsboven"),
     (PipCornerBottomLeft, "Linksonder"),

@@ -133,6 +133,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (Split7030, "70 / 30"),
     (CardPip, "Obraz w obrazie"),
     (PipHint, "Drugi obraz zajmuje ćwiartkę ekranu. Wybierz róg, w którym ma się pojawić."),
+    (PipNeeds60Fmt, "Obraz w obrazie wymaga łącza 60 Hz. Monitor pracuje z {} Hz — najpierw obniż odświeżanie w ustawieniach ekranu systemu."),
     (PipCornerTopLeft, "Lewy górny"),
     (PipCornerTopRight, "Prawy górny"),
     (PipCornerBottomLeft, "Lewy dolny"),

@@ -127,6 +127,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (Split7030, "70 / 30"),
     (CardPip, "Obraz v obraze"),
     (PipHint, "Druhý obraz zabírá čtvrtinu obrazovky. Vyberte roh, ve kterém se má zobrazit."),
+    (PipNeeds60Fmt, "Obraz v obraze vyžaduje 60Hz spojení. Monitor běží na {} Hz – nejprve snižte obnovovací frekvenci v nastavení obrazovky systému."),
     (PipCornerTopLeft, "Vlevo nahoře"),
     (PipCornerTopRight, "Vpravo nahoře"),
     (PipCornerBottomLeft, "Vlevo dole"),

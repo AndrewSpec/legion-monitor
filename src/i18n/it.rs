@@ -127,6 +127,7 @@ pub const ENTRIES: &[(Key, &str)] = &[
     (Split7030, "70 / 30"),
     (CardPip, "Immagine nell’immagine"),
     (PipHint, "La seconda immagine occupa un quarto dello schermo. Scegli l’angolo in cui deve apparire."),
+    (PipNeeds60Fmt, "L’immagine nell’immagine richiede un collegamento a 60 Hz. Il monitor funziona a {} Hz: abbassa prima la frequenza di aggiornamento nelle impostazioni dello schermo del sistema."),
     (PipCornerTopLeft, "In alto a sinistra"),
     (PipCornerTopRight, "In alto a destra"),
     (PipCornerBottomLeft, "In basso a sinistra"),

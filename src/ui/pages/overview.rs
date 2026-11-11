@@ -80,9 +80,10 @@ impl App {
             MultiMode::PictureByPicture => 2,
             MultiMode::Unknown => 3,
         };
+        let pip_blocked = self.pip_refresh_too_high().is_some();
         let items = [
             (self.t(Key::ModeSingle), true),
-            (self.t(Key::ModePip), true),
+            (self.t(Key::ModePip), !pip_blocked),
             (self.t(Key::ModePbp), true),
         ];
         let selected = ui
@@ -134,6 +135,15 @@ impl App {
                     });
                 }
                 _ => {}
+            }
+        }
+        // On the Multi-view page the PIP card carries the same explanation and
+        // sits next to the disabled corners; repeating it here would duplicate
+        // one sentence on a single screen.
+        if self.section != catalog::Section::MultiView {
+            if let Some(note) = self.pip_blocked_note() {
+                ui.add_space(8.0);
+                ui.label(RichText::new(note).size(11.0).color(WARN));
             }
         }
         if matches!(

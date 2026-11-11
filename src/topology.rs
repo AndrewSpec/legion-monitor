@@ -9,9 +9,18 @@
 //! The monitor's DRM connector (from `ddcutil detect`) identifies which output
 //! belongs to the monitor. Everything else that is connected, enabled and not
 //! a clone of that output is an independent screen.
+//!
+//! The same scan reports the refresh rate of the monitor's active mode. PIP
+//! needs a 60 Hz link and the monitor does not expose its rate over DDC/CI, so
+//! the desktop topology is the only place to read it.
 
 use serde::Deserialize;
 use std::process::Command;
+
+/// Highest refresh rate at which the monitor's PIP mode is known to work.
+/// The documented rule is 60 Hz; the tolerance accepts a 59.98 Hz mode, which
+/// is how a nominally 60 Hz signal is often reported.
+pub const PIP_MAX_HZ: f32 = 60.5;
 
 /// Result of a display scan. `known` is false when neither KScreen nor XRandR
 /// could report the topology; callers must then treat the second screen as
@@ -23,11 +32,24 @@ pub struct Displays {
     /// Active mode of the monitor's output, used only as a last-resort panel
     /// shape measurement while the monitor is in single mode.
     pub output_size: Option<(u32, u32)>,
+    /// Refresh rate of the monitor's active mode, when the desktop reports it.
+    pub refresh_hz: Option<f32>,
 }
 
 impl Displays {
     pub fn has_second_screen(&self) -> bool {
         self.known && self.second_screen
+    }
+
+    /// The monitor's refresh rate when it is too high for PIP.
+    ///
+    /// `None` means either the rate is within the documented limit or the
+    /// desktop could not report it. Unknown topologies must not block a
+    /// feature, because KScreen and XRandR are both unavailable on some
+    /// compositors.
+    pub fn refresh_too_high_for_pip(&self) -> Option<f32> {
+        self.refresh_hz
+            .filter(|hz| hz.is_finite() && *hz > PIP_MAX_HZ)
     }
 }
 
@@ -48,11 +70,7 @@ pub fn scan(monitor_connector: &str) -> Displays {
             return displays;
         }
     }
-    Displays {
-        known: false,
-        second_screen: false,
-        output_size: None,
-    }
+    Displays::default()
 }
 
 /// The monitor input family implied by the GPU connector.
@@ -127,6 +145,8 @@ struct KScreenOutput {
 struct KScreenMode {
     id: String,
     size: KScreenSize,
+    #[serde(rename = "refreshRate", default)]
+    refresh_rate: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -159,16 +179,22 @@ fn from_kscreen(root: KScreenRoot, monitor: &str) -> Option<Displays> {
             && !output.clones.contains(&ours.id)
             && !ours.clones.contains(&output.id)
     });
-    let output_size = ours
+    let current = ours
         .modes
         .iter()
-        .find(|mode| mode.id == ours.current_mode_id)
+        .find(|mode| mode.id == ours.current_mode_id);
+    let output_size = current
         .map(|mode| (mode.size.width, mode.size.height))
         .filter(|(width, height)| *width > 0 && *height > 0);
+    let refresh_hz = current
+        .and_then(|mode| mode.refresh_rate)
+        .map(|hz| hz as f32)
+        .filter(|hz| hz.is_finite() && *hz > 0.0);
     Some(Displays {
         known: true,
         second_screen,
         output_size,
+        refresh_hz,
     })
 }
 
@@ -179,6 +205,8 @@ struct XOutput {
     enabled: bool,
     /// The exact `WxH+X+Y` token; identical tokens mean the outputs are mirrored.
     geometry: Option<String>,
+    /// Refresh rate of the starred mode, the one the output currently uses.
+    refresh_hz: Option<f32>,
 }
 
 fn xrandr() -> Option<Vec<XOutput>> {
@@ -194,9 +222,19 @@ fn xrandr() -> Option<Vec<XOutput>> {
 }
 
 fn parse_xrandr(text: &str) -> Vec<XOutput> {
-    let mut outputs = Vec::new();
+    let mut outputs: Vec<XOutput> = Vec::new();
     for line in text.lines() {
-        if line.starts_with(char::is_whitespace) || !line.contains(" connected") {
+        if line.starts_with(char::is_whitespace) {
+            // Indented lines list the modes of the output above them.
+            let Some(output) = outputs.last_mut() else {
+                continue;
+            };
+            if output.connected && output.refresh_hz.is_none() {
+                output.refresh_hz = active_refresh(line);
+            }
+            continue;
+        }
+        if !line.contains(" connected") {
             continue;
         }
         let mut parts = line.split_whitespace();
@@ -214,9 +252,26 @@ fn parse_xrandr(text: &str) -> Vec<XOutput> {
             connected,
             enabled,
             geometry,
+            refresh_hz: None,
         });
     }
     outputs
+}
+
+/// `   5120x1440     59.98*+` — the starred mode is the active one.
+fn active_refresh(line: &str) -> Option<f32> {
+    let mut tokens = line.split_whitespace();
+    tokens.next()?; // the mode name
+    for token in tokens {
+        let Some(rate) = token.trim_end_matches('+').strip_suffix('*') else {
+            continue;
+        };
+        let hz = rate.parse::<f32>().ok()?;
+        if hz.is_finite() && hz > 0.0 && hz < 1000.0 {
+            return Some(hz);
+        }
+    }
+    None
 }
 
 /// `2560x1440+0+0` — the geometry XRandR prints only for an active output.
@@ -245,6 +300,7 @@ fn from_xrandr(outputs: Vec<XOutput>, monitor: &str) -> Option<Displays> {
         known: true,
         second_screen,
         output_size,
+        refresh_hz: ours.refresh_hz,
     })
 }
 
@@ -348,5 +404,61 @@ HDMI-A-1 connected 2560x1440+0+0 (normal left inverted right x axis y axis) 600m
         let displays = from_xrandr(outputs, "card1-DP-1").unwrap();
         assert!(displays.known);
         assert!(!displays.second_screen);
+    }
+
+    #[test]
+    fn kscreen_reads_the_active_mode_refresh_rate() {
+        let json = r#"{"outputs":[
+            {"id":1,"name":"DP-1","connected":true,"enabled":true,"clones":[],
+             "currentModeId":"7","modes":[
+                {"id":"6","name":"5120x1440@165","refreshRate":165,
+                 "size":{"width":5120,"height":1440}},
+                {"id":"7","name":"5120x1440@60","refreshRate":59.97999954223633,
+                 "size":{"width":5120,"height":1440}}]},
+            {"id":2,"name":"eDP-1","connected":false,"enabled":false,"clones":[]}
+        ]}"#;
+        let root: KScreenRoot = serde_json::from_str(json).unwrap();
+        let displays = from_kscreen(root, "dp-1").unwrap();
+        let hz = displays.refresh_hz.unwrap();
+        assert!((hz - 59.98).abs() < 0.01, "unexpected refresh rate {hz}");
+        assert_eq!(displays.refresh_too_high_for_pip(), None);
+    }
+
+    #[test]
+    fn kscreen_flags_a_high_refresh_rate_for_pip() {
+        let json = r#"{"outputs":[
+            {"id":1,"name":"DP-1","connected":true,"enabled":true,"clones":[],
+             "currentModeId":"6","modes":[
+                {"id":"6","name":"5120x1440@165","refreshRate":165,
+                 "size":{"width":5120,"height":1440}}]}
+        ]}"#;
+        let root: KScreenRoot = serde_json::from_str(json).unwrap();
+        let displays = from_kscreen(root, "dp-1").unwrap();
+        assert_eq!(displays.refresh_too_high_for_pip(), Some(165.0));
+    }
+
+    #[test]
+    fn xrandr_reads_the_starred_mode_of_the_active_output() {
+        let text = "\
+eDP-1 connected primary 2560x1440+0+0 (normal left inverted right x axis y axis) 344mm x 194mm
+   2560x1440     59.98*+
+   2560x1440     165.00
+DP-1 connected 5120x1440+2560+0 (normal left inverted right x axis y axis) 600mm x 340mm
+   5120x1440     59.94*+
+   5120x1440    165.00
+HDMI-A-1 disconnected (normal left inverted right x axis y axis)
+";
+        let outputs = parse_xrandr(text);
+        let displays = from_xrandr(outputs, "card1-DP-1").unwrap();
+        let hz = displays.refresh_hz.unwrap();
+        assert!((hz - 59.94).abs() < 0.01, "unexpected refresh rate {hz}");
+        assert_eq!(displays.refresh_too_high_for_pip(), None);
+    }
+
+    #[test]
+    fn unknown_topology_never_blocks_pip() {
+        let displays = Displays::default();
+        assert!(!displays.known);
+        assert_eq!(displays.refresh_too_high_for_pip(), None);
     }
 }

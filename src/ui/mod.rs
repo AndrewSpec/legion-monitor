@@ -134,6 +134,26 @@ impl App {
         !self.busy && matches!(self.conn, Conn::Ok(_))
     }
 
+    /// Re-reads the desktop topology without taking the busy flag.
+    ///
+    /// The rescan only inspects the compositor, so the worker answers with
+    /// `Ev::Displays` and no `Busy(false)`; going through `send` would leave
+    /// the interface disabled forever.
+    fn scan_displays(&mut self) {
+        let _ = self.worker.tx.send(Cmd::ScanDisplays);
+    }
+
+    /// The desktop refresh rate when PIP is not allowed at it.
+    pub(crate) fn pip_refresh_too_high(&self) -> Option<f32> {
+        self.displays.refresh_too_high_for_pip()
+    }
+
+    /// Warning for the interface when PIP is blocked by the refresh rate.
+    pub(crate) fn pip_blocked_note(&self) -> Option<String> {
+        self.pip_refresh_too_high()
+            .map(|hz| self.tf(Key::PipNeeds60Fmt, format!("{hz:.0}")))
+    }
+
     fn set_value(&mut self, code: u8, value: u16) {
         if !self.can_edit() {
             return;
@@ -595,6 +615,13 @@ impl App {
         if !self.can_edit() {
             return;
         }
+        // PIP needs a 60 Hz link: at a higher rate the monitor stretched the
+        // second picture in testing. Refuse here as the single choke point,
+        // not only in the widgets that happen to be visible.
+        if let Some(note) = self.pip_blocked_note() {
+            self.toast = Some((note, true, Instant::now()));
+            return;
+        }
         let main = self.main_source();
         // Trust the monitor's F4 over the cached mode: after a failed or
         // partial PIP attempt F4 can still report a split while the UI thinks
@@ -682,6 +709,11 @@ impl App {
     /// window source independently of the rectangle, so this is the shortest
     /// path from "single" to a visible second picture.
     fn pip_source_picker(&mut self, ui: &mut Ui) {
+        // The card above already explains the block; a disabled picker would
+        // only invite clicks that cannot work.
+        if self.pip_refresh_too_high().is_some() {
+            return;
+        }
         ui.label(RichText::new(self.t(Key::PipSource)).size(13.0).color(TEXT));
         ui.add_space(6.0);
         let sources = self.input_sources();

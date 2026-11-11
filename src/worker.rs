@@ -15,6 +15,12 @@ const ALWAYS: [u8; 7] = ddc::CORE;
 pub enum Cmd {
     Init,
     Refresh,
+    /// Re-reads only the desktop topology, without touching the monitor.
+    ///
+    /// The refresh rate of the desktop output decides whether PIP is allowed,
+    /// so it is rescanned when the Multi-view page opens; it can change while
+    /// the application is running.
+    ScanDisplays,
     Set {
         code: u8,
         value: u16,
@@ -177,6 +183,14 @@ impl Worker {
                                 let _ = etx.send(Ev::Values(vals));
                             }
                             let _ = etx.send(Ev::Busy(false));
+                        }
+
+                        Cmd::ScanDisplays => {
+                            let displays = mon
+                                .as_ref()
+                                .map(|m| topology::scan(&m.connector))
+                                .unwrap_or_default();
+                            let _ = etx.send(Ev::Displays(displays));
                         }
 
                         Cmd::Set { code, value } => {

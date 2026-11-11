@@ -29,8 +29,14 @@ main picture and the new source lands in the quarter.
 A Windows 11 test ran PIP correctly at 60 Hz, while a higher refresh showed a
 degraded, stretched image; the Linux attempt that lost EDID/DDC was at the
 default high refresh. A 60 Hz link is therefore the leading prerequisite for
-the split modes, not yet reproduced on Linux. It does
-not write `0xA4`: the monitor rejected the show value in testing and a mask left
+the split modes, not yet reproduced on Linux. Because of that finding the app
+reads the refresh rate of this monitor's active mode from the desktop topology
+(`kscreen-doctor -j`, `xrandr --query` on X11) and refuses to open PIP above
+60 Hz: the PIP corner selector is disabled, the card explains the measured rate
+and a request that gets through anyway is declined with a toast instead of
+touching the monitor. An unreadable topology is not treated as a reason to
+block, so the guard can only be trusted where the desktop reports the mode. It
+still does not write `0xA4`: the monitor rejected the show value in testing and a mask left
 at zero blanks the whole picture. The monitor often answers `EIO` to `0xA5`
 while still applying it, so that write is verified by state instead of its
 return code. See [Protocol findings](#protocol-findings). PIP placement itself
@@ -223,7 +229,7 @@ returned, so an unsupported feature leaves no trace in the interface.
 | Picture | Brightness, contrast, sharpness, saturation, hue, gamma and black level — only the features the monitor reports |
 | Color | Color temperature, presets and RGB gains |
 | Inputs | DisplayPort, HDMI 1, HDMI 2 and USB-C; the reported active input is highlighted |
-| Multi-view (experimental) | The same monitor card as the Overview, the two supported True Split ratios (50/50 and about 70/30) and the four PIP corners with a quarter-size window; True Split writes both sources in one `0x60` pair, without a swap, and PIP is placed with `0x95`–`0x98` in panel pixels, after PBP is closed and `0xF2` confirms a single picture; the PIP source is written only after the rectangle reads back and `0xF2` reports the window, followed by one swap when it differs from the app input. Leaving a split checks for a second screen and, when there is none, keeps this computer’s source visible; PIP placement still needs a clean hardware run |
+| Multi-view (experimental) | The same monitor card as the Overview, the two supported True Split ratios (50/50 and about 70/30) and the four PIP corners with a quarter-size window; True Split writes both sources in one `0x60` pair, without a swap, and PIP is placed with `0x95`–`0x98` in panel pixels, after PBP is closed and `0xF2` confirms a single picture; the PIP source is written only after the rectangle reads back and `0xF2` reports the window, followed by one swap when it differs from the app input. Leaving a split checks for a second screen and, when there is none, keeps this computer’s source visible; PIP placement still needs a clean hardware run; PIP is refused while the desktop reports more than 60 Hz |
 | Profiles | A/B configurations and any number of named profiles |
 | Rescue | A snapshot of a working single picture, saved automatically at startup and restorable without seeing the screen; while armed, the app keeps probing for the monitor, notices a reconnect and restores the saved source, split state and picture settings |
 | Advanced | Volume, mute, power mode, manufacturer-specific features and reset |
@@ -469,7 +475,11 @@ Other confirmed findings:
   60 Hz; at a higher refresh the image was rendered at a lower resolution and
   stretched. The Linux attempt that produced a 0-byte EDID and only 640x480 was
   running the high-refresh mode. This is not yet a controlled result: test
-  `5120x1440@60` first, then raise the refresh until it breaks.
+  `5120x1440@60` first, then raise the refresh until it breaks. The app now
+  enforces the prerequisite for PIP: it reads the active mode's refresh rate
+  from KScreen (or `xrandr --query` on X11) on every visit to the Overview and
+  Multi-view pages and refuses PIP above 60 Hz, so a high-refresh desktop
+  cannot start a mode the monitor may render wrong.
 - Multi-view: the monitor accepts only two True Split ratios. `0x0101` splits the
   picture 50/50 (confirmed on screen) and `0x0401` about 70/30 (75/25 in the
   register). Other `F5` values are rejected or ignored, so the UI no longer offers

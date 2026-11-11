@@ -202,6 +202,7 @@ pub enum Key {
     Split7030,
     CardPip,
     PipHint,
+    PipNeeds60Fmt,
     PipCornerTopLeft,
     PipCornerTopRight,
     PipCornerBottomLeft,
