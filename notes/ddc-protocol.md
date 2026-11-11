@@ -136,6 +136,24 @@ and a zero mask blanks the picture. The rectangle plus `0xA5` was sufficient.
   rectangle can all survive a mode change. Never use any single one of them as
   proof of the current picture.
 
+## Refresh rate (reported, not verified)
+
+A Windows 11 run placed USB-C in the PIP corner and HDMI 1 in the main picture
+successfully, but only after the operating system switched the display to
+60 Hz. At a higher refresh rate the PIP image was rendered at a lower resolution
+and stretched. The earlier Linux failure (True Split, then a 0-byte DP EDID and
+only 640x480) happened at the desktop's default high refresh.
+
+Working hypothesis: the split/PIP scaler path cannot sustain the full
+5120x1440@165 link, especially when DSC is in use. At 60 Hz the link has enough
+margin; above it the monitor may degrade the picture or drop link training and
+EDID.
+
+Verification plan: set DP-2 to 5120x1440@60 in the OS display settings, confirm
+a non-empty EDID and DDC access, then enable True Split and PIP. Repeat at
+120/165 Hz and record when EDID, DDC or the picture fails. Do not treat the
+60 Hz requirement as confirmed until this runs on Linux.
+
 ## Rescue baseline
 
 A known-good state is the tuple `(0x60 source, 0xF2, 0xF5, brightness,

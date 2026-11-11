@@ -21,7 +21,11 @@ following `0x60` write can point the main picture at an inactive source (black
 screen). The application now closes PBP, verifies through `0xF4` that the
 monitor reports a single picture, writes the rectangle (`0x95`–`0x98`) while
 the monitor is still single, checks that it reads back, selects the PIP window,
-confirms through `0xF4` that it opened, and only then writes the PIP source. It does
+confirms through `0xF4` that it opened, and only then writes the PIP source.
+A Windows 11 test ran PIP correctly at 60 Hz, while a higher refresh showed a
+degraded, stretched image; the Linux attempt that lost EDID/DDC was at the
+default high refresh. A 60 Hz link is therefore the leading prerequisite for
+the split modes, not yet reproduced on Linux. It does
 not write `0xA4`: the monitor rejected the show value in testing and a mask left
 at zero blanks the whole picture. The monitor often answers `EIO` to `0xA5`
 while still applying it, so that write is verified by state instead of its
@@ -336,7 +340,7 @@ Longer session notes, including safe write sequences and failure modes, are in
 |---|---|---|---|
 | Multi-view control | `0xF2` | Write and readback observed | Lenovo calls it *PIP/PBP Swap*: `0` disables the PIP/PBP window, `1` swaps the sources, `3` leaves full-screen mode |
 | True Split layout | `0xF5` | Write and readback observed | Lenovo calls it *PBP Control*: low byte = position (`1` right, `2` left, `3` top, `4` bottom), high byte = ratio (`1` 1:1, `2` 2:1, `3` 1:2, `4` 3:1). On the R45w-30 only `0x0101` (50/50) and `0x0401` (about 70/30) change the picture; the UI offers only those two |
-| Layout status | `0xF4` | Read in the examined path | Lenovo calls it *PIP Size* (`0` min … `0x64` max); the R45w-30 reports `0x0201` for every active split, so it cannot separate PIP from True Split. The app distinguishes them with the low byte of `0xF2` (`1` = PIP, `3` = True Split); a supported `0xF5` layout wins, because `0xF5` can be stale after a mode change |
+| Layout status | `0xF4` | Read in the examined path | Lenovo calls it *PIP Size* (`0` min … `0x64` max); the R45w-30 reports `0x0201` for every active split, so it cannot separate PIP from True Split. The app distinguishes them with the low byte of `0xF2` (`1` = PIP, `3` = True Split); a supported `0xF5` is only a fallback, because `0xF5` can be stale after a mode change |
 | Window mask | `0xA4` | Static analysis of Lenovo's `SetPIPWndRect`; write rejected on the R45w-30 | `0` hides the PIP window while it is moved, `0xFFFF` shows it again in Lenovo's code. The monitor rejected the show write in our path, and a mask left at `0` blanks the whole picture, so the application does not touch `0xA4` |
 | PIP window rectangle | `0x95`–`0x98` | Static analysis of Lenovo's `SetPIPWndRect`; VCP ranges read on the R45w-30 | Left, top, right and bottom in **panel pixels**: the R45w-30 reports maxima 4960/1320/5120/1440 for a 5120×1440 panel, so the app writes a half-size quadrant such as `(2560, 0, 5120, 720)`. The application writes `0x95`, `0x96`, `0x97`, `0x98` while the monitor is still single, verifies the readback, and only then selects the window with `0xA5 = 0x0100`; `GetPIPWndRect` reads the same four codes. Writing `0..100` here made a 100-pixel window and is the bug behind the first PIP attempt |
 | Window selection | `0xA5` | Write and readback observed | Lenovo calls it *Window Select*: `0x0000` closes PIP/PBP, `0x0100` selects the PIP window, `0x0200` the PBP window. The monitor never reads the selection back |
@@ -406,6 +410,11 @@ Other confirmed findings:
   hardware verification.
 - Switching the input from USB-C to HDMI 1 and back worked; the monitor kept
   answering over DDC while the picture was gone.
+- Split modes seem to need a 60 Hz link. In a Windows 11 test PIP worked at
+  60 Hz; at a higher refresh the image was rendered at a lower resolution and
+  stretched. The Linux attempt that produced a 0-byte EDID and only 640x480 was
+  running the high-refresh mode. This is not yet a controlled result: test
+  `5120x1440@60` first, then raise the refresh until it breaks.
 - Multi-view: the monitor accepts only two True Split ratios. `0x0101` splits the
   picture 50/50 (confirmed on screen) and `0x0401` about 70/30 (75/25 in the
   register). Other `F5` values are rejected or ignored, so the UI no longer offers
