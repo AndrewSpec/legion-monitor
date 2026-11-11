@@ -57,9 +57,8 @@ pub struct App {
     /// Last PIP corner chosen in the interface. The monitor's 0x95..0x98
     /// rectangle is the source of truth when it can be read.
     pip_corner: catalog::PipCorner,
-    /// Mode the user just asked for. The registers cannot reliably separate
-    /// PIP from True Split (F4 reports 0x0201 for both), so an explicit
-    /// choice wins until the next reconnect or a failed write.
+    /// Mode the user just asked for. It only bridges the gap until the next
+    /// readback: F4 carries the real window bits, so a fresh read wins.
     mode_hint: Option<MultiMode>,
     /// Desktop topology: is there another screen to fall back to?
     displays: Displays,
@@ -251,36 +250,12 @@ impl App {
 
     /// Reads the mode from the registers when the user has not just chosen one.
     ///
-    /// F4 is a PIP-size register and the R45w-30 reports 0x0201 for every
-    /// active split, so it cannot tell PIP from True Split on its own. F2 is
-    /// the discriminator on this monitor: its low byte is 1 while PIP is open
-    /// and 3 while True Split is active. 0x60 is not usable here: True Split
-    /// also reports only the left source there, so a single byte is not proof
-    /// of PIP.
+    /// F4 is the only register that separates the three states on the
+    /// R45w-30: 0x0000 single, 0x0100 True Split, 0x0101 PIP. F2 reads 0 in
+    /// both split modes, and 0x60 holds only the left source in True Split,
+    /// so neither can be used as a mode flag.
     fn derive_multi_mode(&self) -> MultiMode {
-        let base = catalog::multi_mode(self.value(0xf2), self.value(0xf4));
-        if base == MultiMode::PictureByPicture {
-            return match self.value(0xf2).map(|value| value & 0xff) {
-                Some(1) => MultiMode::PictureInPicture,
-                Some(3) => MultiMode::PictureByPicture,
-                _ => {
-                    // Older firmware leaves 0xF2 at 0 here. A supported F5
-                    // layout still means True Split; otherwise a placed PIP
-                    // rectangle is the only evidence of PIP.
-                    if self.value(0xf5).and_then(catalog::true_split_for).is_some() {
-                        return base;
-                    }
-                    if self.pip_rect_from_registers().is_some() {
-                        return MultiMode::PictureInPicture;
-                    }
-                    base
-                }
-            };
-        }
-        if base == MultiMode::Unknown && self.pip_rect_from_registers().is_some() {
-            return MultiMode::PictureInPicture;
-        }
-        base
+        catalog::multi_mode(self.value(0xf4))
     }
 
     fn connector(&self) -> &str {
@@ -502,7 +477,7 @@ impl App {
     pub(crate) fn save_rescue_baseline(&mut self, manual: bool) {
         let result = if !self.connected() {
             Err(Key::RescueNoMonitor)
-        } else if catalog::multi_mode(self.value(0xf2), self.value(0xf4)) != MultiMode::Off {
+        } else if catalog::multi_mode(self.value(0xf4)) != MultiMode::Off {
             // F4 can read 0 on monitors that do not expose PIP size, so ask
             // the same decoder the rest of the app uses instead of requiring
             // the literal 0x0200.
@@ -622,12 +597,12 @@ impl App {
         }
         let main = self.main_source();
         // Trust the monitor's F4 over the cached mode: after a failed or
-        // partial PIP attempt F4 can say 0x0201 while the UI still thinks the
-        // page is in single mode, and skipping the close leaves PIP on a
-        // half-written window.
+        // partial PIP attempt F4 can still report a split while the UI thinks
+        // the page is single, and skipping the close leaves PIP on a
+        // half-written window. F4 low byte: 0 = True Split, 1 = PIP.
         let leave_pbp = match self.value(0xf4) {
-            Some(0x0201) => true,
-            Some(0x0200) => false,
+            Some(0x0100) => true,
+            Some(0x0101) | Some(0) => false,
             _ => matches!(
                 self.multi_mode(),
                 MultiMode::PictureByPicture | MultiMode::Unknown

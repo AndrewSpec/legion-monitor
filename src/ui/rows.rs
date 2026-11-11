@@ -353,7 +353,7 @@ mod tests {
             app.vals.insert(
                 0xf4,
                 VcpValue {
-                    value: 0x0201,
+                    value: 0x0100,
                     max: 0xffff,
                 },
             );
@@ -402,7 +402,7 @@ mod tests {
         app.vals.insert(
             0xf4,
             VcpValue {
-                value: 0x0200,
+                value: 0x0000,
                 max: 0xffff,
             },
         );
@@ -526,7 +526,7 @@ mod tests {
         app.vals.insert(
             0xf4,
             VcpValue {
-                value: 0x0201,
+                value: 0x0100,
                 max: 0xffff,
             },
         );
@@ -587,7 +587,7 @@ mod tests {
         app.vals.insert(
             0xf4,
             VcpValue {
-                value: 0x0201,
+                value: 0x0100,
                 max: 0xffff,
             },
         );
@@ -613,7 +613,7 @@ mod tests {
         for (code, value) in [
             (0x60, 0x0031),
             (0xf2, 0x0103),
-            (0xf4, 0x0201),
+            (0xf4, 0x0100),
             (0xf5, 0x0402),
             (0x95, 2560),
             (0x96, 0),
@@ -632,9 +632,9 @@ mod tests {
     }
 
     #[test]
-    fn pip_reports_one_in_f2_low_byte() {
+    fn pip_reports_one_in_f4_low_byte() {
         let (mut app, _commands) = app_for_test();
-        for (code, value) in [(0x60, 0x0031), (0xf2, 0x0101), (0xf4, 0x0201)] {
+        for (code, value) in [(0x60, 0x0031), (0xf2, 0x0101), (0xf4, 0x0101)] {
             app.vals.insert(
                 code,
                 VcpValue {
@@ -659,7 +659,7 @@ mod tests {
         app.vals.insert(
             0xf4,
             VcpValue {
-                value: 0x0201,
+                value: 0x0100,
                 max: 0xffff,
             },
         );

@@ -489,13 +489,15 @@ impl MultiMode {
 /// `F2 = 1` and `F4 = 0` in single mode (observed 2026-11-11), so treating a
 /// non-zero `F2` as proof of a split left the Overview on "unknown" while the
 /// monitor was plainly showing one input.
-pub fn multi_mode(f2: Option<u16>, f4: Option<u16>) -> MultiMode {
-    if f2 == Some(0) || f4 == Some(0) {
-        return MultiMode::Off;
-    }
-    match f4.map(|v| v >> 8) {
-        Some(0x01) => MultiMode::PictureInPicture,
-        Some(0x02) => MultiMode::PictureByPicture,
+pub fn multi_mode(f4: Option<u16>) -> MultiMode {
+    // F4 is the authoritative window register of this monitor. F2 reads 0 in
+    // both PIP and True Split, so it cannot be used as a mode flag. The low
+    // byte of F4 is 0 in True Split and 1 while a PIP window is open; a zero
+    // value is a single picture.
+    match f4 {
+        Some(0) => MultiMode::Off,
+        Some(v) if v & 0xff == 1 => MultiMode::PictureInPicture,
+        Some(v) if v & 0xff == 0 => MultiMode::PictureByPicture,
         _ => MultiMode::Unknown,
     }
 }
@@ -551,29 +553,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn multi_mode_uses_f4_when_f2_is_stale() {
-        for f2 in [None, Some(2), Some(93), Some(u16::MAX)] {
-            assert_eq!(multi_mode(f2, None), MultiMode::Unknown);
-            assert_eq!(multi_mode(f2, Some(0)), MultiMode::Off);
-        }
-        assert_eq!(multi_mode(Some(0), Some(0x0201)), MultiMode::Off);
-        assert_eq!(
-            multi_mode(Some(1), Some(0x0101)),
-            MultiMode::PictureInPicture
-        );
-        assert_eq!(
-            multi_mode(Some(1), Some(0x0201)),
-            MultiMode::PictureByPicture
-        );
-        // After an input switch the monitor can report a stale F2; the split
-        // type from F4 is still usable.
-        assert_eq!(
-            multi_mode(Some(0x5d), Some(0x0201)),
-            MultiMode::PictureByPicture
-        );
-        // Live R45w-30 single mode: F2 = 1, F4 = 0. The old code called this
-        // "unknown" and the Overview showed no picture mode at all.
-        assert_eq!(multi_mode(Some(1), Some(0)), MultiMode::Off);
+    fn multi_mode_reads_the_window_bits_of_f4() {
+        assert_eq!(multi_mode(None), MultiMode::Unknown);
+        assert_eq!(multi_mode(Some(0)), MultiMode::Off);
+        assert_eq!(multi_mode(Some(0x0100)), MultiMode::PictureByPicture);
+        assert_eq!(multi_mode(Some(0x0101)), MultiMode::PictureInPicture);
+        // F2 is not part of the signature any more: it reads zero in both
+        // split modes on this monitor.
+        assert_eq!(multi_mode(Some(0x0000)), MultiMode::Off);
     }
 
     #[test]

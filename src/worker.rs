@@ -354,11 +354,11 @@ impl Worker {
                                         }
                                         settle();
                                         thread::sleep(Duration::from_millis(300));
-                                        // 0xF4 reads 0x0201 while the PBP window
-                                        // is still open and 0x0200 after it closes.
-                                        // Retry because a read during the mode
-                                        // change can fail; refuse to write the PIP
-                                        // selector while True Split is reported.
+                                        // F4 low byte carries the window state:
+                                        // 0 = True Split, 1 = PIP, 0 = single when
+                                        // the whole value is zero. Retry because a
+                                        // read during the mode change can fail;
+                                        // refuse to open PIP while a split remains.
                                         if failure.is_none() {
                                             let mut probe = None;
                                             for attempt in 0..3 {
@@ -367,7 +367,9 @@ impl Worker {
                                                     .map(|v| v.value)
                                                 {
                                                     probe = Some(value);
-                                                    if value != 0x0201 {
+                                                    if catalog::multi_mode(Some(value))
+                                                        == MultiMode::Off
+                                                    {
                                                         break;
                                                     }
                                                 }
@@ -376,7 +378,12 @@ impl Worker {
                                                 }
                                             }
                                             match probe {
-                                                Some(0x0201) => stopped = Some(Key::WriteMismatch),
+                                                Some(value)
+                                                    if catalog::multi_mode(Some(value))
+                                                        != MultiMode::Off =>
+                                                {
+                                                    stopped = Some(Key::WriteMismatch)
+                                                }
                                                 None => stopped = Some(Key::WriteUnconfirmed),
                                                 Some(_) => {}
                                             }
@@ -464,7 +471,7 @@ impl Worker {
                                         .map(|v| v.value)
                                     {
                                         active = Some(value);
-                                        if value == 0x0201 {
+                                        if value == 0x0101 {
                                             break;
                                         }
                                     }
@@ -473,7 +480,7 @@ impl Worker {
                                     }
                                 }
                                 match active {
-                                    Some(0x0201) => {}
+                                    Some(0x0101) => {}
                                     Some(_) => stopped = Some(Key::WriteMismatch),
                                     None => stopped = Some(Key::WriteUnconfirmed),
                                 }
@@ -705,10 +712,7 @@ fn single_feedback(
     if let Some(error) = failure {
         return (Key::WriteFailed, error, true);
     }
-    let have = catalog::multi_mode(
-        observed.get(&0xf2).map(|v| v.value),
-        observed.get(&0xf4).map(|v| v.value),
-    );
+    let have = catalog::multi_mode(observed.get(&0xf4).map(|v| v.value));
     // A closed split reports a single-byte 0x60. Accept that even when F2/F4
     // still carry a stale split value; a live PBP reports the full pair.
     let single = observed
@@ -735,10 +739,7 @@ fn mode_feedback(
     if let Some(error) = failure {
         return (Key::WriteFailed, error, true);
     }
-    let have = catalog::multi_mode(
-        observed.get(&0xf2).map(|v| v.value),
-        observed.get(&0xf4).map(|v| v.value),
-    );
+    let have = catalog::multi_mode(observed.get(&0xf4).map(|v| v.value));
     if have == want {
         (Key::WriteConfirmed, "1".to_string(), false)
     } else {
@@ -1041,13 +1042,13 @@ mod tests {
 
         // Still split: nothing was closed.
         vals.insert(0xf2, value(1));
-        vals.insert(0xf4, value(0x0201));
+        vals.insert(0xf4, value(0x0100));
         vals.insert(0x60, value(0x3111));
         assert!(single_feedback(Some(0x31), &vals, None).2);
 
         // F2/F4 can be stale after closing; a single-byte 0x60 proves the mode.
         vals.insert(0xf2, value(0x5d));
-        vals.insert(0xf4, value(0x0201));
+        vals.insert(0xf4, value(0x0101));
         vals.insert(0x60, value(0x31));
         assert!(!single_feedback(Some(0x31), &vals, None).2);
 

@@ -129,10 +129,7 @@ fn dump() {
                         }
                     }
 
-                    let mode = multi_mode(
-                        vals.get(&0xf2).map(|v| v.value),
-                        vals.get(&0xf4).map(|v| v.value),
-                    );
+                    let mode = multi_mode(vals.get(&0xf4).map(|v| v.value));
                     println!();
                     println!(
                         "{}",

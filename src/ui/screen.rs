@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn unknown_layouts_are_drawn_even_and_flagged() {
         assert_eq!(true_split_share(None), (0.5, false));
-        assert_eq!(true_split_share(Some(0x0201)), (0.5, false));
+        assert_eq!(true_split_share(Some(0x0102)), (0.5, false));
         assert_eq!(true_split_share(Some(0x0302)), (0.5, false));
     }
 }
