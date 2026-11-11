@@ -836,6 +836,10 @@ impl App {
                         || self.vals.keys().any(|code| !v.contains_key(code));
                     self.vals = v;
                     self.pending.clear();
+                    // Readback is the truth. An optimistic mode hint must not
+                    // outlive it, or a PIP window opened from the OSD stays
+                    // invisible until the monitor disconnects.
+                    self.mode_hint = None;
                     // The monitor reports the source of each window in one
                     // register; when it reports a usable pair, that is the
                     // truth — a pick the monitor refused is not kept.
