@@ -82,10 +82,12 @@ window near the top-left corner.
 1. `0x60 = (source << 8) | source` (puts the same source in both halves).
 2. `0xA5 = 0` (EIO is expected; the write can still apply).
 3. `0x60 = source`.
-4. Verify with `0xF4 = 0x0200` and `0x60` low byte = source.
+4. `0xF2 = 0` (disable the PIP/PBP window).
+5. Verify with `0xF4 = 0x0200`, `0xF2` low byte 0 and `0x60` low byte = source.
 
 This pair-first sequence is what made a stuck PIP/PBP state recoverable without
-power-cycling the monitor.
+power-cycling the monitor. On the test unit steps 1–3 alone did not clear an
+active PIP window (`0xF2` stayed `0x0101`); step 4 did.
 
 ### Enter True Split
 

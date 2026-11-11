@@ -596,15 +596,21 @@ fn split_plan(left: u16, right: u16, layout: Option<u16>, enable_pbp: bool) -> V
 /// Both halves are pointed at the computer's source before the split closes,
 /// so whichever half the monitor keeps already shows the desktop. The final
 /// single-source write makes 0x60 a plain input code again.
+/// Leaves True Split or PIP for one picture.
+///
+/// The pair and `0xA5 = 0` close a True Split, but an active PIP window also
+/// needs `0xF2 = 0`: on the test unit the pair/selector/source writes alone
+/// left `0xF2 = 0x0101` and the PIP window on screen. `0xF2 = 0` cleared it.
 fn single_plan(source: Option<u16>, pbp: bool) -> Vec<(u8, u16)> {
     match (source, pbp) {
         (Some(source), true) => vec![
             (0x60, catalog::window_pair(source, source)),
             (0xa5, 0),
             (0x60, source),
+            (0xf2, 0),
         ],
-        (Some(source), false) => vec![(0xa5, 0), (0x60, source)],
-        (None, _) => vec![(0xa5, 0)],
+        (Some(source), false) => vec![(0xa5, 0), (0x60, source), (0xf2, 0)],
+        (None, _) => vec![(0xa5, 0), (0xf2, 0)],
     }
 }
 
@@ -1000,6 +1006,7 @@ mod tests {
                 (0x60, 0x3131),
                 (0xa5, 0),
                 (0x60, 0x31),
+                (0xf2, 0),
                 (0x10, 80),
                 (0x12, 60),
             ]
@@ -1010,13 +1017,13 @@ mod tests {
     fn single_plan_puts_our_source_on_both_halves_before_closing() {
         assert_eq!(
             single_plan(Some(0x31), true),
-            vec![(0x60, 0x3131), (0xa5, 0), (0x60, 0x31)]
+            vec![(0x60, 0x3131), (0xa5, 0), (0x60, 0x31), (0xf2, 0)]
         );
         assert_eq!(
             single_plan(Some(0x31), false),
-            vec![(0xa5, 0), (0x60, 0x31)]
+            vec![(0xa5, 0), (0x60, 0x31), (0xf2, 0)]
         );
-        assert_eq!(single_plan(None, true), vec![(0xa5, 0)]);
+        assert_eq!(single_plan(None, true), vec![(0xa5, 0), (0xf2, 0)]);
     }
 
     #[test]

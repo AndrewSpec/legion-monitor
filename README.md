@@ -349,7 +349,9 @@ the monitor on either half:
    the desktop can always be recovered on that screen;
 3. without a second screen it first writes `0x60 = (source << 8) | source` while
    PBP is still active, so both halves show this computer, then closes the split
-   with `0xA5 = 0`, and finally writes the single input `0x60 = source`.
+   with `0xA5 = 0`, writes the single input `0x60 = source`, and disables the
+   PIP/PBP window with `0xF2 = 0`. The last write matters for PIP: the pair and
+   selector alone left an active PIP window on the test unit.
 
 The topology check uses `kscreen-doctor -j`, falling back to `xrandr --query`;
 if neither can be read, the application treats the topology as unknown and asks
