@@ -46,17 +46,21 @@ pub enum Cmd {
         enable_pbp: bool,
     },
     /// Enters picture-by-picture, optionally choosing the layout first.
+    ///
+    /// `source` seeds both halves in 0x60; without it the monitor can keep an
+    /// old pair that is unreadable and cannot be edited.
     SetPbp {
         layout: Option<u16>,
+        source: Option<u16>,
     },
     /// Places the PIP window and stages its source.
     ///
     /// The monitor exposes the PIP rectangle as VCP 0x95..0x98 in panel
     /// pixels; 0xA4 masks the window while it moves. `main` and `source` are
     /// staged together in 0x60 before the PIP selector is written, so a
-    /// selector the monitor ignores cannot change the main picture. The UI
-    /// closes a True Split first; writing 0xA5 = 0x0100 while PBP was open
-    /// froze the monitor's OSD.
+    /// selector the monitor ignores cannot change the main picture. `leave_pbp`
+    /// closes an active PBP window first; writing 0xA5 = 0x0100 while PBP was
+    /// open froze the monitor's OSD, so PBP uses its own close sequence.
     ApplyPip {
         corner: (u16, u16, u16, u16),
         main: Option<u16>,
@@ -74,8 +78,9 @@ pub enum Cmd {
         /// only the main input matters.
         pbp: bool,
     },
-    /// Rescue mode: restores the saved single picture even when the monitor
-    /// currently shows nothing usable.
+    /// Rescue mode: restores a single picture even when the monitor currently
+    /// shows nothing usable. It always turns the hardware True Split off
+    /// first, because an older build could leave it on.
     Rescue {
         source: u16,
         brightness: Option<u16>,
@@ -302,8 +307,9 @@ impl Worker {
                                 write_log(&etx, code, value);
                                 if let Err(e) = ddc::set(m.display, code, value) {
                                     let _ = etx.send(Ev::Log(LogLine::Text(e.clone())));
-                                    failure = Some(e);
-                                    break;
+                                    if !ddc::is_transient(&e) {
+                                        failure = Some(e);
+                                    }
                                 }
                                 settle();
                             }
@@ -315,7 +321,7 @@ impl Worker {
                             let _ = etx.send(Ev::Busy(false));
                         }
 
-                        Cmd::SetPbp { layout } => {
+                        Cmd::SetPbp { layout, source } => {
                             let Some(m) = mon.clone() else {
                                 let _ =
                                     etx.send(Ev::Notice(Key::ErrNotConnected, String::new(), true));
@@ -323,15 +329,16 @@ impl Worker {
                                 continue;
                             };
                             let _ = etx.send(Ev::Busy(true));
+                            let mut failure = None;
                             // Lenovo's SetPIPPBPState maps PBP to 0xA5 = 0x0200;
                             // 0x0100 in PBP froze the monitor's OSD.
-                            let mut failure = None;
-                            for &(code, value) in &pbp_plan(layout) {
+                            for &(code, value) in &pbp_plan(layout, source) {
                                 write_log(&etx, code, value);
                                 if let Err(e) = ddc::set(m.display, code, value) {
                                     let _ = etx.send(Ev::Log(LogLine::Text(e.clone())));
-                                    failure = Some(e);
-                                    break;
+                                    if !ddc::is_transient(&e) {
+                                        failure = Some(e);
+                                    }
                                 }
                                 settle();
                             }
@@ -340,6 +347,11 @@ impl Worker {
                                 mode_feedback(MultiMode::PictureByPicture, &vals, failure);
                             let _ = etx.send(Ev::Notice(key, argument, error));
                             let _ = etx.send(Ev::Values(vals));
+                            // The DP EDID shrinks to one half; give the
+                            // compositor time to apply it, then rescan so PBP
+                            // detection sees the half-width output.
+                            thread::sleep(Duration::from_millis(1200));
+                            let _ = etx.send(Ev::Displays(topology::scan(&m.connector)));
                             let _ = etx.send(Ev::Busy(false));
                         }
 
@@ -576,6 +588,9 @@ impl Worker {
                                 match code {
                                     0xa5 => thread::sleep(Duration::from_millis(400)),
                                     0x60 => settle(),
+                                    0xf8 => thread::sleep(Duration::from_millis(150)),
+                                    0xf7 => thread::sleep(Duration::from_millis(150)),
+                                    0xf5 => thread::sleep(Duration::from_millis(250)),
                                     _ => thread::sleep(Duration::from_millis(120)),
                                 }
                             }
@@ -584,6 +599,8 @@ impl Worker {
                             let (key, argument, error) = single_feedback(Some(source), &vals, None);
                             let _ = etx.send(Ev::Notice(key, argument, error));
                             let _ = etx.send(Ev::Values(vals));
+                            thread::sleep(Duration::from_millis(900));
+                            let _ = etx.send(Ev::Displays(topology::scan(&m.connector)));
                             let _ = etx.send(Ev::Busy(false));
                         }
 
@@ -610,6 +627,8 @@ impl Worker {
                             let (key, argument, error) = single_feedback(source, &vals, None);
                             let _ = etx.send(Ev::Notice(key, argument, error));
                             let _ = etx.send(Ev::Values(vals));
+                            thread::sleep(Duration::from_millis(900));
+                            let _ = etx.send(Ev::Displays(topology::scan(&m.connector)));
                             let _ = etx.send(Ev::Busy(false));
                         }
                     }
@@ -622,10 +641,22 @@ impl Worker {
 }
 
 /// Writes that enter PBP and set its layout, in the order Lenovo uses.
-fn pbp_plan(layout: Option<u16>) -> Vec<(u8, u16)> {
-    let mut plan = vec![(0xa5, 0x0200)];
+fn pbp_plan(layout: Option<u16>, source: Option<u16>) -> Vec<(u8, u16)> {
+    // A hardware True Split left on by the OSD or an older build keeps both
+    // halves on one source. Clear it before opening a real PBP split.
+    let mut plan = vec![
+        (catalog::FEATURE_INDEX, catalog::TRUE_SPLIT_FEATURE),
+        (catalog::FEATURE_VALUE, 0),
+        (0xa5, 0x0200),
+    ];
     if let Some(value) = layout {
         plan.push((0xf5, value));
+    }
+    // PBP needs both half-source bytes. Starting from a known pair makes the
+    // state readable and lets the user change either half; leaving 0x60 alone
+    // showed the monitor's old pair and the pickers could not recover it.
+    if let Some(source) = source {
+        plan.push((0x60, catalog::window_pair(source, source)));
     }
     plan
 }
@@ -646,29 +677,48 @@ fn split_plan(left: u16, right: u16, layout: Option<u16>, enable_pbp: bool) -> V
 
 /// Writes that close a split without losing the desktop.
 ///
-/// Both halves are pointed at the computer's source before the split closes,
-/// so whichever half the monitor keeps already shows the desktop. The final
-/// single-source write makes 0x60 a plain input code again.
-/// Leaves True Split or PIP for one picture.
+/// PBP is closed without `0xA5 = 0x0100`: that selector froze the monitor's
+/// OSD while a PBP split was open. Both halves are first pointed at our source,
+/// then the split closes, then 0x60 becomes a plain single input again.
 ///
-/// The pair and `0xA5 = 0` close a True Split, but an active PIP window also
-/// needs `0xF2 = 0`: on the test unit the pair/selector/source writes alone
-/// left `0xF2 = 0x0101` and the PIP window on screen. `0xF2 = 0` cleared it.
-fn single_plan(source: Option<u16>, _pbp: bool) -> Vec<(u8, u16)> {
-    // Select the background window first, point it at our input, then close
-    // the split.  On the test unit the old order (close, then write 0x60)
-    // changed the mode but the full-screen picture stayed on the other input.
-    match source {
-        Some(source) => vec![(0xa5, 0x0100), (0x60, source), (0xf2, 0), (0xa5, 0)],
-        None => vec![(0xf2, 0), (0xa5, 0)],
+/// PIP still uses `0xA5 = 0x0100` to select the background window; that path
+/// worked and is separate from PBP.
+fn single_plan(source: Option<u16>, pbp: bool) -> Vec<(u8, u16)> {
+    match (source, pbp) {
+        (Some(source), true) => vec![
+            // Clear a hardware True Split left on by the OSD or an older
+            // build before closing the PBP window.
+            (catalog::FEATURE_INDEX, catalog::TRUE_SPLIT_FEATURE),
+            (catalog::FEATURE_VALUE, 0),
+            // Without clearing F5 the link can stay at the half-width PBP
+            // timing even after A5/F2 close the window.
+            (0xf5, 0),
+            (0x60, catalog::window_pair(source, source)),
+            (0xf2, 0),
+            (0xa5, 0),
+            (0x60, source),
+        ],
+        (Some(source), false) => vec![(0xa5, 0x0100), (0x60, source), (0xf2, 0), (0xa5, 0)],
+        (None, _) => vec![(0xf2, 0), (0xa5, 0)],
     }
 }
 
-/// Restores the saved picture and, when the monitor exposes them, the saved
-/// brightness and contrast. The single-picture writes come first so the
-/// picture is usable even if one of the picture settings fails.
+/// Restores one picture and, when the monitor exposes them, the saved
+/// brightness and contrast.
+///
+/// The hardware True Split switch (F8/F7) is always turned off first: an older
+/// build or the OSD could leave it on, and no PIP/PBP write can clear it. The
+/// monitor exposes this feature as index 0x15; F7 = 0 is the safe state. The
+/// remaining writes close PIP/PBP and select the single input.
 fn rescue_plan(source: u16, brightness: Option<u16>, contrast: Option<u16>) -> Vec<(u8, u16)> {
-    let mut plan = single_plan(Some(source), true);
+    let mut plan = vec![
+        (catalog::FEATURE_INDEX, catalog::TRUE_SPLIT_FEATURE),
+        (catalog::FEATURE_VALUE, 0),
+        (0xf5, 0),
+        (0xf2, 0),
+        (0xa5, 0),
+        (0x60, source),
+    ];
     if let Some(value) = brightness {
         plan.push((0x10, value));
     }
@@ -771,7 +821,7 @@ fn single_feedback(
     (Key::WriteConfirmed, "1".to_string(), false)
 }
 
-/// Checks that the mode reported by F2/F4 is the one that was requested.
+/// Checks the mode reported by F2.
 fn mode_feedback(
     want: MultiMode,
     observed: &BTreeMap<u8, VcpValue>,
@@ -780,9 +830,19 @@ fn mode_feedback(
     if let Some(error) = failure {
         return (Key::WriteFailed, error, true);
     }
-    let have = catalog::multi_mode(observed.get(&0xf2).map(|v| v.value));
-    if have == want {
+    let have = catalog::multi_mode(observed.get(&0xf2).map(|value| value.value));
+    // PBP can leave F2 at zero on this unit even while the screen is split;
+    // an active F5 layout is then the authoritative evidence.
+    let split_by_layout = want == MultiMode::PictureByPicture
+        && have == MultiMode::Off
+        && observed
+            .get(&0xf5)
+            .and_then(|value| catalog::split_layout_for(value.value))
+            .is_some();
+    if have == want || split_by_layout {
         (Key::WriteConfirmed, "1".to_string(), false)
+    } else if have == MultiMode::Unknown {
+        (Key::WriteUnconfirmed, String::new(), true)
     } else {
         (Key::WriteMismatch, "1".to_string(), true)
     }
@@ -991,7 +1051,20 @@ mod tests {
             split_plan(0x11, 0x31, Some(0x0101), true),
             vec![(0xa5, 0x0200), (0xf5, 0x0101), (0x60, 0x3111)]
         );
-        assert_eq!(pbp_plan(None), vec![(0xa5, 0x0200)]);
+        assert_eq!(
+            pbp_plan(None, None),
+            vec![(0xf8, 0x15), (0xf7, 0), (0xa5, 0x0200)]
+        );
+        assert_eq!(
+            pbp_plan(Some(0x0101), Some(0x31)),
+            vec![
+                (0xf8, 0x15),
+                (0xf7, 0),
+                (0xa5, 0x0200),
+                (0xf5, 0x0101),
+                (0x60, 0x3131),
+            ]
+        );
         assert!(!split_plan(0x11, 0x31, None, false)
             .iter()
             .any(|(code, _)| *code == 0xf2));
@@ -1041,15 +1114,17 @@ mod tests {
     }
 
     #[test]
-    fn rescue_plan_closes_the_split_before_picture_settings() {
+    fn rescue_plan_turns_true_split_off_before_picture_settings() {
         let plan = rescue_plan(0x31, Some(80), Some(60));
         assert_eq!(
             plan,
             vec![
-                (0xa5, 0x0100),
-                (0x60, 0x31),
+                (0xf8, 0x15),
+                (0xf7, 0),
+                (0xf5, 0),
                 (0xf2, 0),
                 (0xa5, 0),
+                (0x60, 0x31),
                 (0x10, 80),
                 (0x12, 60),
             ]
@@ -1057,10 +1132,35 @@ mod tests {
     }
 
     #[test]
-    fn single_plan_selects_the_background_before_closing() {
+    fn pbp_feedback_accepts_the_layout_when_f2_stays_zero() {
+        let value = |v: u16| VcpValue {
+            value: v,
+            max: 0xffff,
+        };
+        let mut observed = BTreeMap::new();
+        observed.insert(0xf2, value(0x0103));
+        assert!(!mode_feedback(MultiMode::PictureByPicture, &observed, None).2);
+        // On this unit PBP can leave F2 at zero; F5 is then the evidence.
+        observed.insert(0xf2, value(0));
+        assert!(mode_feedback(MultiMode::PictureByPicture, &observed, None).2);
+        observed.insert(0xf5, value(0x0101));
+        assert!(!mode_feedback(MultiMode::PictureByPicture, &observed, None).2);
+        assert!(mode_feedback(MultiMode::PictureByPicture, &BTreeMap::new(), None).2);
+    }
+
+    #[test]
+    fn single_plan_closes_pbp_without_the_pip_selector() {
         assert_eq!(
             single_plan(Some(0x31), true),
-            vec![(0xa5, 0x0100), (0x60, 0x31), (0xf2, 0), (0xa5, 0)]
+            vec![
+                (0xf8, 0x15),
+                (0xf7, 0),
+                (0xf5, 0),
+                (0x60, 0x3131),
+                (0xf2, 0),
+                (0xa5, 0),
+                (0x60, 0x31),
+            ]
         );
         assert_eq!(
             single_plan(Some(0x31), false),

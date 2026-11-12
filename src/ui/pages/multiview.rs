@@ -9,50 +9,44 @@ impl App {
         // a split on or off.
         self.screen_card(ui);
 
-        ui.add_space(16.0);
-        let active = self.value(0xf5).and_then(catalog::true_split_for);
-        let pbp = self.multi_mode() == MultiMode::PictureByPicture;
+        let mode = self.multi_mode();
+        let pbp = mode == MultiMode::PictureByPicture;
         let panel_ratio = self.panel.ratio;
-        card_titled(ui, self.t(Key::CardTrueSplit), |ui| {
-            ui.label(
-                RichText::new(self.t(Key::TrueSplitHint))
-                    .size(11.5)
-                    .color(DIM),
-            );
+        let connected = !self.busy && matches!(self.conn, Conn::Ok(_));
+
+        ui.add_space(16.0);
+        card_titled(ui, self.t(Key::CardPbp), |ui| {
+            ui.label(RichText::new(self.t(Key::PbpHint)).size(11.5).color(DIM));
             ui.add_space(12.0);
-            let mut chosen: Option<catalog::TrueSplit> = None;
-            ui.horizontal(|ui| {
-                for split in catalog::TrueSplit::ALL {
-                    if ui
-                        .add_enabled_ui(!self.busy && matches!(self.conn, Conn::Ok(_)), |ui| {
-                            true_split_tile(
-                                ui,
-                                split,
-                                pbp && active == Some(split),
-                                &self.tr,
-                                panel_ratio,
-                            )
-                        })
-                        .inner
-                        .clicked()
-                    {
-                        chosen = Some(split);
-                    }
-                    ui.add_space(10.0);
-                }
-            });
-            if let Some(split) = chosen {
+            let clicked = ui
+                .add_enabled_ui(connected, |ui| {
+                    // PBP on this monitor applies 50/50; the wider layout
+                    // belongs to the monitor's hardware True Split, which is
+                    // not exposed because it forces a 120 Hz link.
+                    split_tile(
+                        ui,
+                        catalog::SplitLayout::Half,
+                        pbp,
+                        Key::ModePbp,
+                        &self.tr,
+                        panel_ratio,
+                    )
+                })
+                .inner
+                .clicked();
+            if clicked {
                 self.mode_hint = Some(MultiMode::PictureByPicture);
                 if pbp {
-                    // Already in True Split: repair the layout without
-                    // rewriting the sources.
-                    self.send(Cmd::Apply(vec![(0xf5, split.value())]));
+                    // Already in PBP: repair the layout without rewriting
+                    // the sources.
+                    self.send(Cmd::Apply(vec![(0xf5, catalog::SplitLayout::Half.value())]));
                 } else {
-                    // Entering True Split clears the old pair (it may belong
-                    // to PIP); the readback fills in the real one.
+                    // The old pair may belong to PIP or True Split; the
+                    // readback fills in the real one.
                     self.win_sources = [0, 0];
                     self.send(Cmd::SetPbp {
-                        layout: Some(split.value()),
+                        layout: Some(catalog::SplitLayout::Half.value()),
+                        source: self.pbp_entry_source(),
                     });
                 }
             }

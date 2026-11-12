@@ -6,10 +6,10 @@ use crate::panel::{Panel, PanelSource};
 use crate::ui::*;
 
 /// Left window's share of the width and whether the monitor confirms that
-/// geometry. Only the two True Split layouts the R45w-30 applies are real;
-/// any other F5 value is drawn as an even, explicitly approximate split.
-fn true_split_share(layout: Option<u16>) -> (f32, bool) {
-    match layout.and_then(catalog::true_split_for) {
+/// geometry. Only the two split layouts the R45w-30 applies are real; any
+/// other F5 value is drawn as an even, explicitly approximate split.
+fn split_share(layout: Option<u16>) -> (f32, bool) {
+    match layout.and_then(catalog::split_layout_for) {
         Some(split) => (split.share(), true),
         None => (0.5, false),
     }
@@ -40,7 +40,7 @@ impl App {
         );
         let pair = self.split_pair().filter(|_| split);
         let single = self.value(0x60).filter(|value| *value <= 0xff);
-        let (share, exact) = true_split_share(self.value(0xf5));
+        let (share, exact) = split_share(self.value(0xf5));
         let connected = matches!(self.conn, Conn::Ok(_));
         let scene = Scene {
             mode,
@@ -82,7 +82,7 @@ impl App {
 
             self.monitor_scene(ui, panel, scene);
 
-            // Only a True Split can be an approximate reading of F5. PIP's
+            // Only a split can be an approximate reading of F5. PIP's
             // rectangle is known even when the source register is not.
             if mode == MultiMode::PictureByPicture && !exact {
                 ui.add_space(8.0);
@@ -431,15 +431,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn true_split_layouts_have_their_shares() {
-        assert_eq!(true_split_share(Some(0x0101)), (0.5, true));
-        assert_eq!(true_split_share(Some(0x0401)), (0.70, true));
+    fn split_layouts_have_their_shares() {
+        assert_eq!(split_share(Some(0x0101)), (0.5, true));
+        assert_eq!(split_share(Some(0x0401)), (0.70, true));
     }
 
     #[test]
     fn unknown_layouts_are_drawn_even_and_flagged() {
-        assert_eq!(true_split_share(None), (0.5, false));
-        assert_eq!(true_split_share(Some(0x0102)), (0.5, false));
-        assert_eq!(true_split_share(Some(0x0302)), (0.5, false));
+        assert_eq!(split_share(None), (0.5, false));
+        assert_eq!(split_share(Some(0x0102)), (0.5, false));
+        assert_eq!(split_share(Some(0x0302)), (0.5, false));
     }
 }

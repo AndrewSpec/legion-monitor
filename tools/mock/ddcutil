@@ -2,8 +2,8 @@
 # Offline stand-in for ddcutil used by the GUI checks in tools/mock/README.md.
 #
 # LEGION_MOCK_SCENARIO selects a canned monitor state:
-#   single-16:9, single-21:9, single-32:9, pbp-32:9, pbp-32:9-75, pip-21:9,
-#   offline
+#   single-16:9, single-21:9, single-32:9, pbp-32:9, pbp-32:9-75,
+#   true-split-32:9, true-split-stale, pip-21:9, offline
 #
 # It only implements the subcommands this application calls: detect,
 # capabilities and --terse getvcp. Values are plausible but not measured.
@@ -21,6 +21,7 @@ case "$scenario" in
         f2="0000"
         f4="0000"
         f5="0000"
+        f7="0"
         ;;
     single-21:9)
         model="Legion R34w-30"
@@ -31,6 +32,7 @@ case "$scenario" in
         f2="0000"
         f4="0000"
         f5="0000"
+        f7="0"
         ;;
     single-32:9)
         model="Lenovo Legion R45w-30"
@@ -41,6 +43,7 @@ case "$scenario" in
         f2="0000"
         f4="0000"
         f5="0000"
+        f7="0"
         ;;
     pbp-32:9)
         # Left USB-C (0x31), right HDMI 1 (0x11), 50/50 split.
@@ -52,6 +55,7 @@ case "$scenario" in
         f2="0103"
         f4="0100"
         f5="0101"
+        f7="0"
         ;;
     pbp-32:9-75)
         # The second layout verified on the R45w-30: 75/25.
@@ -63,6 +67,19 @@ case "$scenario" in
         f2="0103"
         f4="0100"
         f5="0401"
+        f7="0"
+        ;;
+    true-split-32:9)
+        # Hardware True Split: one USB-C input, two displays in the system.
+        model="Lenovo Legion R45w-30"
+        brightness=96
+        contrast=83
+        source="31"
+        f0="FFFF"
+        f2="0103"
+        f4="0101"
+        f5="0101"
+        f7="1"
         ;;
     true-split-stale)
         # R45w-30 after the OSD enabled True Split 50/50: only the left source
@@ -75,6 +92,7 @@ case "$scenario" in
         f2="0103"
         f4="0100"
         f5="0402"
+        f7="1"
         ;;
     pip-21:9)
         # Main DisplayPort (0x0F), inset HDMI 2 (0x12).
@@ -86,6 +104,7 @@ case "$scenario" in
         f2="0100"
         f4="0101"
         f5="0000"
+        f7="0"
         ;;
     *)
         echo "unknown LEGION_MOCK_SCENARIO: $scenario" >&2
@@ -145,6 +164,8 @@ Feature: 0xf0 (Audio Source)
 Feature: 0xf2 (PIP/PBP)
 Feature: 0xf4 (PIP Size)
 Feature: 0xf5 (PBP Control)
+Feature: 0xf7 (Monitor Features)
+Feature: 0xf8 (Monitor Feature Index)
 Feature: 0x72 (Gamma)
 Feature: 0x87 (Sharpness)
 Feature: 0xa5 (Window Select)
@@ -168,12 +189,19 @@ EOF
                     F2|f2) echo "VCP f2 SNC $f2" ;;
                     F4|f4) echo "VCP f4 SNC $f4" ;;
                     F5|f5) echo "VCP f5 SNC $f5" ;;
+                    F7|f7) echo "VCP f7 SNC $f7" ;;
+                    F8|f8) echo "VCP f8 SNC 15" ;;
                 esac
             done
         fi
         ;;
+    setvcp)
+        # Readback in this mock is static; accept the write so the UI checks
+        # can exercise their code paths without a monitor.
+        exit 0
+        ;;
     *)
-        echo "mock ddcutil supports only detect, capabilities and getvcp" >&2
+        echo "mock ddcutil supports only detect, capabilities, getvcp and setvcp" >&2
         exit 2
         ;;
 esac

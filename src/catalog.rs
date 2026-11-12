@@ -97,8 +97,8 @@ pub fn fn_key(code: u8) -> Option<Key> {
         0xf2 => Key::FnMultiMode,
         0xf4 => Key::FnWindowLayout,
         0xf5 => Key::FnWindowGeometry,
-        0xf7 => Key::FnKvm,
-        0xf8 => Key::FnDaisyChain,
+        0xf7 => Key::FnTrueSplitState,
+        0xf8 => Key::FnFeatureIndex,
         0x62 => Key::FnVolume,
         0x8d => Key::FnMute,
         0xd6 => Key::FnPower,
@@ -305,25 +305,27 @@ pub fn power_modes() -> &'static [(u16, Key)] {
     ]
 }
 
-/// The two True Split layouts the R45w-30 actually applies.
+/// The two split proportions the R45w-30 actually applies.
 ///
-/// The OSD offers 50/50 and "about 70/30"; F5 uses `0x0101` and `0x0401`.
-/// Other codes from the protocol notes are accepted or rejected by the
-/// monitor without changing the picture, so they are not offered.
+/// Picture-by-picture uses 50/50. True Split uses either 50/50 or the wider
+/// "about 70/30" layout. F5 carries the proportion for both modes: `0x0101`
+/// (1:1) and `0x0401` (3:1). Other codes from the protocol notes are accepted
+/// or rejected by the monitor without changing the picture, so they are not
+/// offered. True Split itself is switched by the feature registers F8/F7.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum TrueSplit {
+pub enum SplitLayout {
     Half,
     Wide,
 }
 
-impl TrueSplit {
-    pub const ALL: [TrueSplit; 2] = [TrueSplit::Half, TrueSplit::Wide];
+impl SplitLayout {
+    pub const ALL: [SplitLayout; 2] = [SplitLayout::Half, SplitLayout::Wide];
 
     /// F5 value that selects the layout.
     pub fn value(self) -> u16 {
         match self {
-            TrueSplit::Half => 0x0101,
-            TrueSplit::Wide => 0x0401,
+            SplitLayout::Half => 0x0101,
+            SplitLayout::Wide => 0x0401,
         }
     }
 
@@ -332,26 +334,37 @@ impl TrueSplit {
     /// picture reads, so the preview follows the label.
     pub fn share(self) -> f32 {
         match self {
-            TrueSplit::Half => 0.5,
-            TrueSplit::Wide => 0.70,
+            SplitLayout::Half => 0.5,
+            SplitLayout::Wide => 0.70,
         }
     }
 
     /// Label of the layout, for example `50 / 50`.
     pub fn key(self) -> Key {
         match self {
-            TrueSplit::Half => Key::Split5050,
-            TrueSplit::Wide => Key::Split7030,
+            SplitLayout::Half => Key::Split5050,
+            SplitLayout::Wide => Key::Split7030,
         }
     }
 }
 
 /// Decodes the F5 register into a layout the monitor supports.
-pub fn true_split_for(value: u16) -> Option<TrueSplit> {
-    TrueSplit::ALL
+pub fn split_layout_for(value: u16) -> Option<SplitLayout> {
+    SplitLayout::ALL
         .into_iter()
         .find(|layout| layout.value() == value)
 }
+
+/// F8 selects which monitor feature the F7 register exposes.
+pub const FEATURE_INDEX: u8 = 0xf8;
+/// F7 carries the value of the feature selected through F8.
+pub const FEATURE_VALUE: u8 = 0xf7;
+/// Feature index 0x15 is the monitor's hardware True Split.
+///
+/// The app no longer enables it (it forces the link to 120 Hz and can blank
+/// the panel); rescue only writes F7 = 0 to leave it if it was enabled from
+/// the OSD or an older build.
+pub const TRUE_SPLIT_FEATURE: u16 = 0x15;
 
 /// Corner of the PIP window. The monitor's OSD offers exactly these four.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -457,7 +470,7 @@ impl PipCorner {
     }
 }
 
-/// Multi-view mode derived from F2 + F4.
+/// Multi-view mode derived from F2.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MultiMode {
     Off,
@@ -479,16 +492,34 @@ impl MultiMode {
 
 /// Decodes the state from the registers that were read.
 ///
-/// `F2` is the authoritative mode register on the R45w-30. Its current value
-/// is zero for one picture, `0x0100`/`0x0101` for PIP (bit 0 is the swap flag)
-/// and `0x0103` for True Split/PBP (bit 1 is set). `F4` is not a mode: it
-/// mirrors the selected window and can keep `0x0100` after the split closes.
+/// `F2` is the mode register on the R45w-30. Its current value is zero for one
+/// picture, `0x0100`/`0x0101` for PIP (bit 0 is the swap flag) and `0x0103`
+/// for a two-picture PBP split (bit 1 is set). The monitor uses the same value
+/// for its hardware True Split, which this app does not expose: that mode
+/// changes the link to 2560x1440@120 and can blank the panel. `F4` is not a
+/// mode: it mirrors the selected window and can keep `0x0100` after the split
+/// closes.
 pub fn multi_mode(f2: Option<u16>) -> MultiMode {
     match f2 {
         Some(0) => MultiMode::Off,
         Some(v) if v & 0x0002 != 0 => MultiMode::PictureByPicture,
         Some(_) => MultiMode::PictureInPicture,
         None => MultiMode::Unknown,
+    }
+}
+
+/// Mode detection that also accepts PBP without its F2 bit.
+///
+/// On the R45w-30 PBP can leave F2 at zero while the split is physically
+/// open. In that state F5 still holds the layout and the DisplayPort EDID
+/// shrinks to one half, so the desktop reports a half-width output. Only that
+/// combination is treated as PBP; a stale F5 alone must not invent a split.
+pub fn multi_mode_detected(f2: Option<u16>, f5: Option<u16>, half_width_output: bool) -> MultiMode {
+    let mode = multi_mode(f2);
+    if mode == MultiMode::Off && half_width_output && f5.and_then(split_layout_for).is_some() {
+        MultiMode::PictureByPicture
+    } else {
+        mode
     }
 }
 
@@ -532,10 +563,7 @@ pub fn window_pair(left: u16, right: u16) -> u16 {
 
 /// Whether an F0 byte looks like a picture-source code (0 = no window, 0xff = unknown).
 pub fn known_source(b: u8) -> bool {
-    matches!(
-        b,
-        0x01 | 0x03 | 0x0f | 0x10 | 0x11 | 0x12 | 0x13 | 0x1f | 0x31
-    )
+    matches!(b, 0x01 | 0x03 | 0x0f | 0x10 | 0x11..=0x1f | 0x31..=0x3f)
 }
 
 #[cfg(test)]
@@ -552,6 +580,24 @@ mod tests {
     }
 
     #[test]
+    fn pbp_is_detected_without_the_f2_bit() {
+        assert_eq!(
+            multi_mode_detected(Some(0), Some(0x0101), true),
+            MultiMode::PictureByPicture
+        );
+        // Stale F5 alone, or a full-width output, stays single.
+        assert_eq!(
+            multi_mode_detected(Some(0), Some(0x0101), false),
+            MultiMode::Off
+        );
+        assert_eq!(multi_mode_detected(Some(0), Some(0), true), MultiMode::Off);
+        assert_eq!(
+            multi_mode_detected(Some(0x0103), Some(0), false),
+            MultiMode::PictureByPicture
+        );
+    }
+
+    #[test]
     fn window_sources_are_low_left_high_right() {
         assert_eq!(window_sources(Some(0x3111)), Some((0x11, 0x31)));
         assert_eq!(window_sources(Some(0x1231)), Some((0x31, 0x12)));
@@ -562,13 +608,13 @@ mod tests {
     }
 
     #[test]
-    fn true_split_decodes_only_the_supported_codes() {
-        assert_eq!(true_split_for(0x0101), Some(TrueSplit::Half));
-        assert_eq!(true_split_for(0x0401), Some(TrueSplit::Wide));
-        assert_eq!(TrueSplit::Half.share(), 0.5);
-        assert_eq!(TrueSplit::Wide.share(), 0.70);
+    fn split_layout_decodes_only_the_supported_codes() {
+        assert_eq!(split_layout_for(0x0101), Some(SplitLayout::Half));
+        assert_eq!(split_layout_for(0x0401), Some(SplitLayout::Wide));
+        assert_eq!(SplitLayout::Half.share(), 0.5);
+        assert_eq!(SplitLayout::Wide.share(), 0.70);
         for code in [0, 0x0102, 0x0201, 0x0202, 0x0301, 0x0302, 0x0402, 0x00ff] {
-            assert_eq!(true_split_for(code), None, "{code:04X}");
+            assert_eq!(split_layout_for(code), None, "{code:04X}");
         }
     }
 

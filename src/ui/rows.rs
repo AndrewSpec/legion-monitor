@@ -544,8 +544,9 @@ mod tests {
                             assert!(leave_pbp);
                             assert_eq!(app.multi_mode(), MultiMode::PictureInPicture);
                         }
-                        (2, Cmd::SetPbp { layout }) => {
+                        (2, Cmd::SetPbp { layout, source }) => {
                             assert_eq!(layout, Some(0x0101));
+                            assert_eq!(source, Some(0x31));
                         }
                         (_, other) => {
                             panic!("unexpected command: {:?}", std::mem::discriminant(&other))
@@ -647,7 +648,7 @@ mod tests {
     }
 
     #[test]
-    fn true_split_50_50_is_not_reported_as_pip() {
+    fn pbp_50_50_is_not_reported_as_pip() {
         let (mut app, _commands) = app_for_test();
         for (code, value) in [
             (0x60, 0x0031),

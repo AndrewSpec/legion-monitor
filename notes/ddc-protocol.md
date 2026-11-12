@@ -1,7 +1,8 @@
 # DDC/CI notes: Legion R45w-30
 
-Technical notes from developing the Multi-view (True Split / PIP) and Rescue
-features. They describe the monitor's DDC/CI behaviour as observed on the test
+Technical notes from developing the Multi-view (PBP / PIP) and Rescue
+features, including the monitor's hardware True Split protocol, which the app
+does **not** expose because it blanked the panel at 120 Hz on 2026-11-12. They describe the monitor's DDC/CI behaviour as observed on the test
 machine, not a vendor specification. No host names, addresses, serial numbers
 or user paths are recorded here.
 
@@ -29,7 +30,7 @@ in `src/ddc.rs` already combines `sh`/`sl` for the current value.
 | --- | --- | --- |
 | `0x10` | Brightness | 0..100 |
 | `0x12` | Contrast | 0..100 |
-| `0x60` | Input source | Single byte = selected/window input. A pair `(right << 8) | left` works for True Split; in PIP the high byte is not stored and reads back as the low byte. |
+| `0x60` | Input source | Single byte = selected input. In PBP a pair `(right << 8) | left` sets both halves; True Split keeps a single byte because both displays show one input. In PIP the high byte is not stored and reads back as the low byte. |
 | `0x95` | PIP rectangle left | Pixels, not percent |
 | `0x96` | PIP rectangle top | Pixels |
 | `0x97` | PIP rectangle right | Pixels |
@@ -38,9 +39,11 @@ in `src/ddc.rs` already combines `sh`/`sl` for the current value.
 | `0xA5` | Window select | `0` close/full, `0x0100` PIP/background window, `0x0200` PBP window. Reads back as 0 even after it takes effect. |
 | `0xD6` | Power mode | `1` on, `4` off; a DDC power cycle did not reset mode registers. |
 | `0xF0` | Audio/source pair | Low byte left, high byte right on models that report it. |
-| `0xF2` | PIP/PBP mode | **Current value is the mode:** `0x0000` single, `0x0100` PIP, `0x0101` PIP with the pictures swapped, `0x0103` True Split. Writes: `0` closes the window, `1` swaps main/PIP. Maximum is `0x0001`. |
+| `0xF2` | PIP/PBP mode | **Current value is the mode:** `0x0000` single, `0x0100` PIP, `0x0101` PIP with the pictures swapped, `0x0103` a split. Bit 1 only says "split"; the app treats every split as PBP and does not probe `0xF7` during normal readback. Writes: `0` closes the window, `1` swaps main/PIP. Maximum is `0x0001`. |
 | `0xF4` | Selected window mirror | Not a mode. Observed `0x0101` in PIP, `0x0100` after a swap and `0x0100` while single. Maximum is `0x0201`. Do not classify the mode from it. |
-| `0xF5` | True Split layout | `0x0101` = 50/50, `0x0401` = about 70/30. Reads 0 after leaving a split; `0x0402` is the maximum. |
+| `0xF5` | Split layout | `0x0101` = 50/50, `0x0401` = about 70/30. The app writes only `0x0101` (PBP); the wider value belongs to the hardware True Split. Reads 0 after leaving a split; `0x0402` is the maximum. |
+| `0xF7` | Monitor feature value | Only meaningful after `0xF8` selects a feature. With `0xF8 = 0x15` it is the True Split switch: `0` off, `1` on. |
+| `0xF8` | Monitor feature index | Selects which feature `0xF7` reads or writes. `0x15` = True Split. |
 
 A zero PIP rectangle does not prove that no window is shown.
 
@@ -49,14 +52,26 @@ A zero PIP rectangle does not prove that no window is shown.
 | State | `0x60` | `0xF2` current | `0xF4` current | `0xF5` current | `0xA5` | `0x95..0x98` |
 | --- | --- | --- | --- | --- | --- | --- |
 | Single, USB-C | `0x31` | `0x0000` | `0x0100` (stale) | 0 | 0 | 0,0,0,0 or stale |
-| True Split 50/50 | `0x31` (left only) | `0x0103` | `0x0101` | 0 | 0 | stale from an earlier PIP attempt |
+| PBP 50/50 (2026-11-12) | `0x31` (left only) | `0x0000` | `0x0000` | `0x0101` | 0 | stale from an earlier PIP attempt |
+| PBP 50/50 (earlier observation) | `0x31` (left only) | `0x0103` | `0x0101` | 0 | 0 | stale from an earlier PIP attempt |
 | PIP, main HDMI 1 / corner USB-C | `0x31` | `0x0100` | `0x0100` | 0 | 0 | 2560,0,5120,720 |
 | PIP, swapped | `0x31` | `0x0101` | `0x0101` | 0 | 0 | same rectangle |
 
-True Split reports only the left input in the low byte of `0x60`; the right
-source is not exposed through DDC in that mode. Classification uses `0xF2`:
-zero is single, bit 1 is True Split, otherwise it is PIP. `0xF4` mirrors the
-selected window and stays non-zero after the split closes.
+PBP can report only the left input in the low byte of `0x60`; the right source
+is not always exposed through DDC. In the 2026-11-12 hardware run `0x60` stayed
+at `0x0031` in PBP, while `0xF0` reported the full pair: `0x0F31` right after
+opening and `0x1131` after changing the right half to HDMI 1. A source change
+therefore writes the full pair to `0x60` (and the app also reads `0xF0` as the
+pair fallback). The pair write itself can answer `EIO` while still applying.
+
+Classification cannot rely on `0xF2` alone: on this unit PBP left F2 at
+`0x0000` while the split was physically open. The app treats the state as PBP
+when F2 says single **and** F5 holds a valid layout **and** the compositor
+reports a half-width output (2560 instead of the native 5120). The half-width
+EDID is the decisive physical signal; F5 alone can be stale. Do not select
+`0xF8 = 0x15` and read `0xF7` during normal polling: that probe disturbed the
+following F2/F5/0x60 reads and made PBP look like True Split. `0xF4` mirrors the
+selected window and is not a mode register.
 
 ## Rectangle geometry
 
@@ -97,15 +112,55 @@ Do not close first and write the source afterwards. That changed the mode but
 left the other input full-screen because the write no longer targeted the
 background window.
 
-### Enter True Split
+### Leave True Split
 
-1. `0xA5 = 0x0200`.
-2. `0xF5 = 0x0101` or `0x0401`.
-3. `0x60 = (right << 8) | left`.
-4. Verify `0xF2` bit 1 is set.
+1. `0xF8 = 0x15` (select the feature).
+2. `0xF7 = 0` (switch it off).
+3. Wait until `0xF2 = 0`; the DP link renegotiates and the register can lag.
+4. Verify `0xF7` reads `0` and `0xF2` reports one picture.
 
-Only 50/50 and about 70/30 changed the picture on the test unit. The other
-layout codes were accepted but ignored or rejected with `DDCRC_VERIFY`.
+Do **not** use the PBP/PIP exit here: writing `0xA5 = 0x0100` while True Split
+is active froze the OSD in testing.
+
+### Enter PBP
+
+1. `0xF8 = 0x15`, `0xF7 = 0` (clear a legacy hardware True Split; harmless when
+   it is already off). The app does this because an OSD-enabled True Split
+   would feed both PBP halves from one source.
+2. `0xA5 = 0x0200`.
+3. `0xF5 = 0x0101` (this monitor applies only 50/50 in PBP).
+4. `0x60 = (right << 8) | left`; seeding both bytes with the current input makes
+   the pair readable so either half can be changed afterwards.
+5. Verify the split physically: F5 reads `0x0101` and the desktop output is
+   2560x1440 (half of the native 5120x1440). F2 can stay `0x0000` on this unit;
+   accept that when F5 and the half-width EDID agree. Do **not** read `0xF7`
+   here: the extra F8/F7 probe disturbed the following F2/F5/0x60 reads and
+   broke PBP state display.
+6. Changing a half writes one full `0x60` pair. `0x60` may keep reporting only
+   the left byte; read `0xF0` to confirm the applied pair.
+
+The other F5 layout codes belong to the hardware True Split and were accepted
+but ignored or rejected with `DDCRC_VERIFY` in PBP.
+
+### Enter True Split (not exposed by the app)
+
+True Split is a USB-C feature on this unit. Require `0x60 & 0xFF` in
+`0x31..=0x3F` first.
+
+1. If PIP or PBP is active, close it with the matching sequence and wait for
+   `0xF2 = 0`.
+2. `0xF8 = 0x15` (select the True Split feature).
+3. `0xF7 = 1` (switch it on).
+4. `0xF5 = 0x0101` or `0x0401` (50/50 or about 70/30).
+5. Verify `0xF7` reads `1`; the system should now see two displays.
+
+The `0xF8`/`0xF7` sequence comes from Lenovo's background service
+(`SetVCPFeature` at `0x4ac219`, `GetVCPFeature` at `0x4ac253`, `SetVCPFeature`
+at `0x4ac2cd` in the service disassembly). It was run against the physical
+monitor on 2026-11-12: over USB-C the link became 2560x1440 at 120 Hz, the panel
+went black and DDC disappeared. The compositor owns the refresh rate, so the app
+cannot undo that. Only the off step (`0xF8 = 0x15`, `0xF7 = 0`) remains in the
+app, as part of Rescue and PBP cleanup.
 
 ### Enter PIP
 
@@ -146,14 +201,17 @@ and a zero mask blanks the picture. The rectangle plus `0xA5` was sufficient.
 - **Half-screen standby / frozen OSD**: `0xA5 = 0x0100` while PBP was active.
   A full single-picture write and, in one case, an AC power cycle recovered it.
 - **100-pixel PIP window**: rectangle written as percent instead of pixels.
-- **True Split with no EDID on DP**: after switching to True Split, the DP
-  connector reported a 0-byte EDID and only a 640x480 fallback mode; DDC
-  disappeared as well, so software could not switch back. The desktop
-  environment then enabled the internal panel. Disabling/enabling the DP output
-  did not restore the EDID; only a monitor power cycle did. It is not known
-  whether this is a monitor firmware limitation, a link-training issue or a
-  cable issue. The app should not claim that True Split succeeded when the DP
-  EDID disappears and should keep a recovery path that does not require DDC.
+- **Split entry with no EDID on DP**: the old UI labelled the two-source PBP
+  write "True Split". After entering that split, the DP connector reported a
+  0-byte EDID and only a 640x480 fallback mode; DDC disappeared as well, so
+  software could not switch back. The desktop environment then enabled the
+  internal panel. Disabling/enabling the DP output did not restore the EDID;
+  only a monitor power cycle did. It is not known whether this is a monitor
+  firmware limitation, a link-training issue or a cable issue. The app should
+  not claim that a split succeeded when the DP EDID disappears and should keep
+  a recovery path that does not require DDC. The hardware True Split path also
+  renegotiates the link (one 5120x1440 output becomes two displays), so the
+  same caution applies; it has not been tested on this monitor yet.
 - **Stale split data**: an old PIP rectangle can survive a mode change, and the
   `0xF5`/`0xF4` maxima are easy to mistake for current values. `0xF2` current
   value is the reliable mode signal; verify it rather than a cached UI hint.
@@ -163,8 +221,9 @@ and a zero mask blanks the picture. The rectangle plus `0xA5` was sufficient.
 A Windows 11 run placed USB-C in the PIP corner and HDMI 1 in the main picture
 successfully, but only after the operating system switched the display to
 60 Hz. At a higher refresh rate the PIP image was rendered at a lower resolution
-and stretched. The earlier Linux failure (True Split, then a 0-byte DP EDID and
-only 640x480) happened at the desktop's default high refresh.
+and stretched. The earlier Linux failure (the split write then labelled True
+Split, followed by a 0-byte DP EDID and only 640x480) happened at the desktop's
+default high refresh.
 
 Working hypothesis: the split/PIP scaler path cannot sustain the full
 5120x1440@165 link, especially when DSC is in use. At 60 Hz the link has enough
@@ -172,15 +231,19 @@ margin; above it the monitor may degrade the picture or drop link training and
 EDID.
 
 Verification plan: set DP-2 to 5120x1440@60 in the OS display settings, confirm
-a non-empty EDID and DDC access, then enable True Split and PIP. Repeat at
+a non-empty EDID and DDC access, then enable PBP and PIP. Repeat at
 120/165 Hz and record when EDID, DDC or the picture fails. Do not treat the
 60 Hz requirement as confirmed until this runs on Linux.
 
 ## Rescue baseline
 
 A known-good state is the tuple `(0x60 source, 0xF2, 0xF5, brightness,
-contrast)` captured while `0xF2 = 0` and `0x60` is a single byte. The restore
-sequence is the single-picture sequence above plus brightness and contrast.
+contrast)` captured while `0xF2 = 0` and `0x60` is a single byte. A baseline is
+optional: "Restore now" always works while the monitor answers DDC and falls
+back to the current input when no baseline exists. Restore always writes
+`0xF8 = 0x15`, `0xF7 = 0` (clear a legacy hardware True Split), `0xF5 = 0`,
+`0xF2 = 0`, `0xA5 = 0`, then the single source; brightness and contrast follow
+when a baseline stored them.
 Arming must not close a working split by itself; restore on a
 disconnected-to-connected transition, or on an explicit user action.
 
@@ -192,7 +255,8 @@ after the monitor returns.
 
 - Unit tests cover rectangle decoding, mode classification, the single-picture
   plan, the PIP plan order and the Rescue plan.
-- Mock scenarios cover single 16:9/21:9/32:9, True Split, PIP, a stale True
-  Split state and an offline monitor.
+- Mock scenarios cover single 16:9/21:9/32:9, PBP, PIP, a stale split state and
+  an offline monitor. The `true-split` scenario is kept only as a protocol
+  preview; the UI no longer uses it.
 - Real hardware was used for the register sequences above. A supervised test is
-  still required after any change to the True Split or PIP write order.
+  still required after any change to the PBP or PIP write order.

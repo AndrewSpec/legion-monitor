@@ -475,6 +475,24 @@ pub fn set(display: u32, code: u8, value: u16) -> Result<(), String> {
     }
 }
 
+/// Whether a failed `setvcp` can still have applied.
+///
+/// The R45w-30 answers EIO (or "Invalid value") while it switches PIP/PBP
+/// modes even though the write lands. Callers must continue and decide by
+/// reading the register back instead of treating this as a hard failure.
+pub fn is_transient(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    error.contains("eio")
+        || error.contains("-5")
+        || error.contains("invalid value")
+        || error.contains("unsupported")
+        // The link renegotiates when PBP opens or closes: ddcutil then reports
+        // a lost bus for a few seconds even though the write landed.
+        || error.contains("ddc communication failed")
+        || error.contains("no monitor detected")
+        || error.contains("retries")
+}
+
 /// Turns an input name from ddcutil into a human-readable one.
 pub fn human_input(raw: &str) -> String {
     let r = raw.trim();
@@ -559,12 +577,26 @@ pub fn input_name(t: &Strings, code: u16) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        input_card_name, parse_capabilities, parse_vcp_line, parse_verbose_line, VcpValue,
+        input_card_name, is_transient, parse_capabilities, parse_vcp_line, parse_verbose_line,
+        VcpValue,
     };
 
     fn assert_value(parsed: Option<(u8, VcpValue)>, expected: (u8, u16, u16)) {
         let (code, value) = parsed.expect("expected a valid VCP line");
         assert_eq!((code, value.value, value.max), expected);
+    }
+
+    #[test]
+    fn link_renegotiation_is_treated_as_transient() {
+        for error in [
+            "DDC communication failed for monitor on bus /dev/i2c-8",
+            "No monitor detected on bus /dev/i2c-8",
+            "maximum retries exceeded",
+            "EIO in ddc_write_read_with_retry",
+        ] {
+            assert!(is_transient(error), "{error}");
+        }
+        assert!(!is_transient("permission denied"));
     }
 
     #[test]

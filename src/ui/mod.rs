@@ -270,12 +270,19 @@ impl App {
 
     /// Reads the mode from the registers when the user has not just chosen one.
     ///
-    /// F2 is the mode register on the R45w-30: zero is one picture,
-    /// 0x0100/0x0101 is PIP (bit 0 is the swap flag) and 0x0103 is True
-    /// Split. F4 mirrors the selected window and can stay non-zero after the
-    /// split closes, so it must not be used here.
+    /// F2 is the nominal mode register on the R45w-30: zero is one picture,
+    /// 0x0100/0x0101 is PIP (bit 0 is the swap flag) and 0x0103 is a split.
+    /// On this unit F2 can keep reporting zero while PBP is physically open,
+    /// so an active F5 layout plus a half-width desktop output also means PBP.
+    /// F4 mirrors the selected window and can stay non-zero after the split
+    /// closes, so it must not be used here.
     fn derive_multi_mode(&self) -> MultiMode {
-        catalog::multi_mode(self.value(0xf2))
+        let (panel_width, _) = self.panel.pixel_size();
+        let half_width = self
+            .displays
+            .output_size
+            .is_some_and(|(width, _)| panel_width > 0 && width.saturating_mul(2) <= panel_width);
+        catalog::multi_mode_detected(self.value(0xf2), self.value(0xf5), half_width)
     }
 
     fn connector(&self) -> &str {
@@ -285,9 +292,46 @@ impl App {
         }
     }
 
+    /// Source of this computer, as far as the app can tell.
+    ///
+    /// In single mode the low byte of 0x60 is the active input. In PIP/PBP
+    /// only an explicit pick or the GPU connector inference is trusted; the
+    /// pair bytes can belong to either half.
+    pub(crate) fn current_input(&self) -> Option<u16> {
+        if let Some(source) = self.self_source {
+            return Some(source);
+        }
+        if matches!(
+            self.multi_mode(),
+            MultiMode::Off | MultiMode::PictureByPicture
+        ) {
+            // In PBP the low byte still names the primary (left) input, which
+            // is the half carried by this DisplayPort link.
+            return self
+                .value(0x60)
+                .map(|value| value & 0xff)
+                .filter(|value| *value > 0);
+        }
+        None
+    }
+
+    /// The source to seed both PBP halves with when entering the mode.
+    ///
+    /// In single mode this is the live input; when a split is already open it
+    /// is the remembered source or the low byte of the 0x60 pair.
+    pub(crate) fn pbp_entry_source(&self) -> Option<u16> {
+        self.self_source
+            .or_else(|| {
+                self.value(0x60)
+                    .map(|value| value & 0xff)
+                    .filter(|value| *value > 0)
+            })
+            .or_else(|| self.current_input())
+    }
+
     /// Keeps `self_source` in sync with the monitor.
     ///
-    /// In single mode 0x60 is the input in use, so it is authoritative. In a
+    /// In single mode, 0x60 is the input in use, so it is authoritative. In a
     /// split the application remembers the source from before the split; if it
     /// started while a split was already active, the GPU connector can resolve
     /// an unambiguous pair (for example HDMI 1 + USB-C on a DisplayPort link).
@@ -435,6 +479,25 @@ impl App {
             .or_else(|| catalog::window_sources(self.value(0x60)))
     }
 
+    /// Pair usable for editing PBP, even when the monitor reports one half.
+    ///
+    /// In PBP the unit often answers 0x60 with only the primary byte (for
+    /// example 0x0031). Treat that as the left source and mirror it into the
+    /// missing right half so a picker can still write a complete pair; the
+    /// user can then replace either side.
+    fn pbp_pair_for_edit(&self) -> Option<(u16, u16)> {
+        self.split_pair().or_else(|| {
+            let left = self
+                .value(0x60)
+                .map(|value| value & 0xff)
+                .filter(|value| *value > 0)?;
+            let right = Some(self.win_sources[1])
+                .filter(|value| *value != 0)
+                .unwrap_or(left);
+            Some((left, right))
+        })
+    }
+
     /// PIP rectangle reported by the monitor, as fractions of the picture.
     ///
     /// 0x95..0x98 take panel pixels, not percentages: on the R45w-30 the
@@ -535,22 +598,34 @@ impl App {
         }
     }
 
-    /// Sends the saved single picture to the worker.
+    /// Sends a hard single-picture recovery to the worker.
+    ///
+    /// A saved baseline is optional: when there is none, the current input is
+    /// used and only the mode reset is applied. This is deliberate — the rescue
+    /// tab has to work after a split that left the monitor unusable, even if
+    /// the user never saved a baseline.
     pub(crate) fn restore_rescue(&mut self) {
-        let Some(base) = self.settings.rescue.clone() else {
-            self.rescue_status = Some((Key::RescueEmpty, true));
-            return;
-        };
         if !self.connected() || self.busy {
             self.rescue_status = Some((Key::RescueNoMonitor, true));
             return;
         }
+        let base = self.settings.rescue.clone();
+        let source = base
+            .as_ref()
+            .map(|base| base.source)
+            .or(self.self_source)
+            .or_else(|| {
+                self.value(0x60)
+                    .map(|value| value & 0xff)
+                    .filter(|value| *value > 0)
+            })
+            .unwrap_or(0x31);
         self.rescue_after = None;
         self.rescue_pending = true;
         self.send(Cmd::Rescue {
-            source: base.source,
-            brightness: base.brightness,
-            contrast: base.contrast,
+            source,
+            brightness: base.as_ref().and_then(|base| base.brightness),
+            contrast: base.as_ref().and_then(|base| base.contrast),
         });
     }
 
@@ -623,20 +698,16 @@ impl App {
             return;
         }
         let main = self.main_source();
-        // Trust the monitor's F4 over the cached mode: after a failed or
-        // partial PIP attempt F4 can still report a split while the UI thinks
+        // Trust the monitor's registers over the cached mode: after a failed or
+        // partial PIP attempt F2 can still report a split while the UI thinks
         // the page is single, and skipping the close leaves PIP on a
-        // half-written window. F4 low byte: 0 = True Split, 1 = PIP.
-        // F2 is the mode register: bit 1 marks True Split, zero is single
-        // and the remaining values are PIP. When the register is missing,
-        // fall back to what the page last showed.
+        // half-written window.
+        //
+        let mode = self.multi_mode();
         let leave_pbp = match self.value(0xf2) {
-            Some(0) => false,
+            Some(0) => mode == MultiMode::PictureByPicture,
             Some(value) => value & 0x0002 != 0,
-            None => matches!(
-                self.multi_mode(),
-                MultiMode::PictureByPicture | MultiMode::Unknown
-            ),
+            None => matches!(mode, MultiMode::PictureByPicture | MultiMode::Unknown),
         };
         let (width, height) = self.panel.pixel_size();
         self.pip_corner = corner;
@@ -668,17 +739,25 @@ impl App {
         ui.label(RichText::new(label).size(13.0).color(TEXT));
         ui.add_space(6.0);
         let sources = self.input_sources();
-        let pair = self.split_pair();
+        let pair = self.pbp_pair_for_edit();
         let current = if pip {
             self.pip_source().unwrap_or(0)
         } else {
             pair.map(|p| if window == 0 { p.0 } else { p.1 })
+                .or_else(|| Some(self.win_sources[window]).filter(|code| *code != 0))
+                .or_else(|| (window == 0).then(|| self.current_input()).flatten())
                 .unwrap_or(0)
         };
         // A PIP source is independent of the F0 pair: the monitor can accept
-        // it even when the pair register is unreadable. PBP still needs both
-        // halves because it writes them together.
-        let enabled = (pip || pair.is_some()) && !self.busy && matches!(self.conn, Conn::Ok(_));
+        // it even when the pair register is unreadable. In PBP a half that
+        // the monitor has not reported yet can still be written: the other
+        // half starts from this computer's input.
+        let enabled = (pip
+            || pair.is_some()
+            || self.current_input().is_some()
+            || self.win_sources[window] != 0)
+            && !self.busy
+            && matches!(self.conn, Conn::Ok(_));
         let mut chosen: Option<u16> = None;
         ui.add_enabled_ui(enabled, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -692,7 +771,7 @@ impl App {
         if let Some(code) = chosen {
             self.apply_window_source(window, code);
         }
-        if !pip && pair.is_none() {
+        if !pip && pair.is_none() && !enabled {
             ui.add_space(4.0);
             ui.label(
                 RichText::new(self.t(Key::WindowsUnknown))
@@ -761,16 +840,21 @@ impl App {
 
     /// Writes the source of one window of a split.
     ///
-    /// In True Split both sources are written together to 0x60; in PIP the
-    /// monitor keeps its separate window selector `0xA5 = 0x0100`, so the
-    /// source can be set even when the F0 pair is unreadable.
+    /// In PBP both halves are written together to 0x60; in PIP the monitor
+    /// keeps its separate window selector `0xA5 = 0x0100`, so the source can
+    /// be set even when the F0 pair is unreadable. True Split has no second
+    /// source and never reaches this function.
     fn apply_window_source(&mut self, window: usize, source: u16) {
         if self.busy || !matches!(self.conn, Conn::Ok(_)) {
             return;
         }
         match self.multi_mode() {
             MultiMode::PictureByPicture => {
-                let Some((left, right)) = self.split_pair() else {
+                // If the monitor has not reported the pair yet, start the
+                // unknown half from this computer's input and set the chosen
+                // one; writing a zero byte would select an invalid input.
+                let pair = self.pbp_pair_for_edit();
+                let Some((left, right)) = pair else {
                     self.toast = Some((
                         self.t(Key::WindowsUnknown).to_string(),
                         true,
@@ -785,10 +869,14 @@ impl App {
                 };
                 // A valid layout is left untouched: changing only a source
                 // must not blank the picture with a redundant F5 write.
-                let layout = if self.value(0xf5).and_then(catalog::true_split_for).is_some() {
+                let layout = if self
+                    .value(0xf5)
+                    .and_then(catalog::split_layout_for)
+                    .is_some()
+                {
                     None
                 } else {
-                    Some(catalog::TrueSplit::Half.value())
+                    Some(catalog::SplitLayout::Half.value())
                 };
                 self.win_sources = [left, right];
                 self.send(Cmd::ApplySplit {

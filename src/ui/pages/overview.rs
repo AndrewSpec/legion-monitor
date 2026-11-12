@@ -74,7 +74,8 @@ impl App {
     }
 
     pub(crate) fn mode_selector(&mut self, ui: &mut Ui) {
-        let current = match self.multi_mode() {
+        let mode = self.multi_mode();
+        let current = match mode {
             MultiMode::Off => 0,
             MultiMode::PictureInPicture => 1,
             MultiMode::PictureByPicture => 2,
@@ -94,13 +95,15 @@ impl App {
         if let Some(i) = selected {
             match i {
                 0 => {
+                    self.win_sources = [0, 0];
+                    self.mode_hint = Some(MultiMode::Off);
                     // Lenovo's SetPIPPBPState closes the split with 0xA5 = 0.
                     // Without a second screen the monitor must return to the
                     // input this computer is on; with one, the user can fix a
-                    // wrong input on that screen.
-                    self.win_sources = [0, 0];
+                    // wrong input on that screen. The PBP close path also
+                    // clears a hardware True Split left by an older build.
                     let second = self.displays.has_second_screen();
-                    let source = if second { None } else { self.self_source };
+                    let source = if second { None } else { self.current_input() };
                     if !second && source.is_none() {
                         self.toast = Some((
                             self.t(Key::ErrSelfSourceUnknown).to_string(),
@@ -108,30 +111,26 @@ impl App {
                             Instant::now(),
                         ));
                     } else {
-                        let pbp = self.multi_mode() == MultiMode::PictureByPicture;
-                        self.mode_hint = Some(MultiMode::Off);
+                        let pbp = mode == MultiMode::PictureByPicture;
                         self.send(Cmd::DisableMultiView { source, pbp });
                     }
                 }
                 1 => {
                     // PIP is placed with the monitor's window rectangle, not
-                    // with F5. The worker leaves True Split first and checks
-                    // that it closed before writing the PIP selector.
+                    // with F5. The worker leaves True Split or PBP first and
+                    // checks that it closed before writing the PIP selector.
                     let corner = self.pip_corner_from_registers();
                     self.enter_pip(corner);
                 }
                 2 => {
-                    let layout = self
-                        .value(0xf5)
-                        .and_then(catalog::true_split_for)
-                        .map(catalog::TrueSplit::value)
-                        .unwrap_or(catalog::TrueSplit::Half.value());
-                    // The old pair may belong to PIP or to a previous split;
-                    // the readback after SetPbp fills in the real one.
+                    // PBP on this monitor is only 50/50; the two half sources
+                    // are picked on the Multi-view page after it opens.
+                    let layout = catalog::SplitLayout::Half.value();
                     self.win_sources = [0, 0];
                     self.mode_hint = Some(MultiMode::PictureByPicture);
                     self.send(Cmd::SetPbp {
                         layout: Some(layout),
+                        source: self.pbp_entry_source(),
                     });
                 }
                 _ => {}

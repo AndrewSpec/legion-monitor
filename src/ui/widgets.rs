@@ -188,11 +188,16 @@ pub(crate) fn input_card(ui: &mut Ui, t: &Strings, name: &str, active: bool) -> 
     resp
 }
 
-/// Tile for one of the two True Split layouts.
-pub(crate) fn true_split_tile(
+/// Tile for one PBP or True Split proportion.
+///
+/// Both panes stay neutral: PBP feeds them from two inputs and True Split
+/// exposes them as two displays of the same picture, so tinting one as "this
+/// computer" would be wrong in half of the cases.
+pub(crate) fn split_tile(
     ui: &mut Ui,
-    split: catalog::TrueSplit,
+    split: catalog::SplitLayout,
     selected: bool,
+    title: Key,
     t: &Strings,
     panel_ratio: f32,
 ) -> egui::Response {
@@ -201,20 +206,16 @@ pub(crate) fn true_split_tile(
     let preview = Rect::from_min_size(outer.min, Vec2::new(outer.width(), 84.0));
     let inner = mini_monitor(ui, preview, selected, resp.hovered(), panel_ratio);
 
-    // The left window is this computer's picture; a faint accent tint keeps
-    // that reading without adding a badge to a tile this small.
     let divider = inner.left() + inner.width() * split.share();
-    let gap = 2.0;
+    let gap = 3.0;
     let left = Rect::from_min_max(inner.min, Pos2::new(divider - gap / 2.0, inner.bottom()));
     let right = Rect::from_min_max(Pos2::new(divider + gap / 2.0, inner.top()), inner.max);
-    ui.painter()
-        .rect_filled(left, CornerRadius::same(2), ACCENT.gamma_multiply(0.12));
-    ui.painter().rect_filled(
-        right,
-        CornerRadius::same(2),
-        Color32::from_rgb(0x14, 0x19, 0x22),
-    );
     for pane in [left, right] {
+        ui.painter().rect_filled(
+            pane,
+            CornerRadius::same(2),
+            Color32::from_rgb(0x14, 0x19, 0x22),
+        );
         ui.painter().rect_stroke(
             pane,
             CornerRadius::same(2),
@@ -238,7 +239,7 @@ pub(crate) fn true_split_tile(
     );
 
     caption(ui, outer, split.key(), selected, t);
-    resp.on_hover_text(format!("{} · {}", t.t(Key::ModePbp), t.t(split.key())))
+    resp.on_hover_text(format!("{} · {}", t.t(title), t.t(split.key())))
 }
 
 /// Tile for one PIP corner: the picture with a quarter-size inset.

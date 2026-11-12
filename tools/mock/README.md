@@ -6,7 +6,9 @@ canned answers so the GUI can be built, rendered and reviewed without hardware.
 The canned monitor also reports a representative picture/color feature set
 (brightness, contrast, gamma, sharpness, temperature, preset and RGB gains).
 
-They implement only the calls this application makes. The values are plausible
+They implement only the calls this application makes; `setvcp` is accepted but
+does not change the canned readback, so a render can show an active split but
+cannot exercise a mode switch end to end. The values are plausible
 test data, not measurements, and a successful render does not prove hardware
 support.
 
@@ -18,9 +20,10 @@ support.
 | `single-21:9` | Legion R34w-30, 3440 × 1440 | single input |
 | `single-32:9` | Legion R45w-30, 5120 × 1440 | single input |
 | `pbp-32:9` | Legion R45w-30, 5120 × 1440 | PBP 50/50, USB-C left, HDMI 1 right |
-| `pbp-32:9-75` | Legion R45w-30, 5120 × 1440 | PBP 75/25, USB-C left, HDMI 1 right |
+| `pbp-32:9-75` | Legion R45w-30, 5120 × 1440 | PBP with an unexpected 75/25 layout (`0xF5=0x0401`); the app repairs it to 50/50 |
 | `pip-21:9` | Legion R34w-30, 3440 × 1440 | PiP, DisplayPort main, HDMI 2 inset |
-| `true-split-stale` | Legion R45w-30, 5120 × 1440 | True Split after the OSD: only the left source in `0x60`, stale `0xF5=0x0402` |
+| `true-split-32:9` | Legion R45w-30, 5120 × 1440 | Hardware True Split 50/50 over USB-C (`0xF2=0x0103`, `0xF7=1`) |
+| `true-split-stale` | Legion R45w-30, 5120 × 1440 | True Split after the OSD: USB-C in `0x60`, stale `0xF5=0x0402` |
 
 ## Rendering a page
 

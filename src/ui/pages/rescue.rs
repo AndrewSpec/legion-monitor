@@ -80,7 +80,7 @@ impl App {
 
             ui.add_space(12.0);
             let restore = ui
-                .add_enabled_ui(base.is_some() && connected && !busy, |ui| {
+                .add_enabled_ui(connected && !busy, |ui| {
                     accent_button(ui, self.t(Key::RescueRestoreNow))
                 })
                 .inner
