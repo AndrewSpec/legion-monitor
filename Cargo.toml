@@ -1,6 +1,6 @@
 [package]
 name = "legion-monitor"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "Control a Lenovo Legion R45w-30 monitor (brightness, inputs, PiP/PbP, profiles) over DDC/CI"
 license = "GPL-3.0-only"

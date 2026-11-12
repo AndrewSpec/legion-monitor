@@ -15,6 +15,7 @@
 //! the desktop topology is the only place to read it.
 
 use serde::Deserialize;
+use std::cmp::Ordering;
 use std::process::Command;
 
 /// Highest refresh rate at which the monitor's PIP mode is known to work.
@@ -34,6 +35,9 @@ pub struct Displays {
     pub output_size: Option<(u32, u32)>,
     /// Refresh rate of the monitor's active mode, when the desktop reports it.
     pub refresh_hz: Option<f32>,
+    /// Number of enabled external outputs. True Split exposes two (DP-3 and
+    /// DP-4); PIP/PBP and single mode expose one.
+    pub external_screens: u8,
 }
 
 impl Displays {
@@ -51,6 +55,408 @@ impl Displays {
         self.refresh_hz
             .filter(|hz| hz.is_finite() && *hz > PIP_MAX_HZ)
     }
+}
+
+/// Lowers the monitor's desktop mode to the highest refresh rate at or below
+/// [`PIP_MAX_HZ`], keeping the current resolution.
+///
+/// Returns the rate that is active afterwards (the current one when it is
+/// already low enough). KScreen is preferred because it addresses a mode by
+/// id; XRandR is the fallback for X11 sessions.
+pub fn set_refresh_60(monitor_connector: &str) -> Result<f32, String> {
+    let monitor = short_name(monitor_connector);
+    if monitor.is_empty() {
+        return Err("the monitor has no GPU connector".to_string());
+    }
+
+    if let Some(root) = kscreen() {
+        if let Some(output) = root
+            .outputs
+            .iter()
+            .find(|output| same_connector(&output.name, &monitor))
+        {
+            if !output.connected || !output.enabled {
+                return Err(format!("{} is not an active output", output.name));
+            }
+            let current = output
+                .modes
+                .iter()
+                .find(|mode| mode.id == output.current_mode_id);
+            if let Some(hz) = current.and_then(|mode| mode.refresh_rate) {
+                if hz.is_finite() && hz > 0.0 && hz <= PIP_MAX_HZ as f64 {
+                    return Ok(hz as f32);
+                }
+            }
+            let target = pick_60_mode(&output.modes, current).ok_or_else(|| {
+                "the driver offers no 60 Hz mode at the current resolution".to_string()
+            })?;
+            let argument = format!("output.{}.mode.{}", output.name, target.id);
+            let out = Command::new("kscreen-doctor")
+                .env("LC_ALL", "C")
+                .arg(&argument)
+                .output()
+                .map_err(|e| format!("kscreen-doctor: {e}"))?;
+            if !out.status.success() {
+                return Err(format!(
+                    "kscreen-doctor {argument}: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+            return Ok(target.refresh_rate.unwrap_or(0.0) as f32);
+        }
+    }
+
+    xrandr_set_60(&monitor)
+}
+
+/// One output/mode pair used by the unit tests for the pre-split planner.
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq)]
+struct RefreshTarget {
+    name: String,
+    mode_id: String,
+    hz: f32,
+}
+
+/// True Split creates external DP/HDMI sinks; the internal panel must keep
+/// its own refresh rate.
+fn external_output(name: &str) -> bool {
+    !name.to_ascii_lowercase().starts_with("edp")
+}
+
+/// Picks a 60 Hz mode for every active external output that is above the limit.
+///
+/// True Split re-enumerates the link into two independent outputs; the desktop
+/// may initially give each of them a high-refresh mode. This plan is applied
+/// after the monitor reports the new topology, not before it.
+#[cfg(test)]
+fn plan_60_all(root: &KScreenRoot) -> Vec<RefreshTarget> {
+    root.outputs
+        .iter()
+        .filter(|output| output.connected && output.enabled && external_output(&output.name))
+        .filter_map(|output| {
+            let current = output
+                .modes
+                .iter()
+                .find(|mode| mode.id == output.current_mode_id);
+            let hz = current.and_then(|mode| mode.refresh_rate)?;
+            if !hz.is_finite() || hz <= PIP_MAX_HZ as f64 {
+                return None;
+            }
+            let target = pick_60_mode(&output.modes, current)?;
+            Some(RefreshTarget {
+                name: output.name.clone(),
+                mode_id: target.id.clone(),
+                hz: target.refresh_rate.unwrap_or(0.0) as f32,
+            })
+        })
+        .collect()
+}
+
+/// A split topology fix: enable the newly appeared external output(s), switch
+/// them to 60 Hz, and turn the internal panel back off if KWin enabled it.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct SplitSetup {
+    args: Vec<String>,
+    applied: Vec<(String, f32)>,
+}
+
+/// Picks a 60 Hz mode at the largest available resolution. Used when a newly
+/// appeared output has no current mode yet.
+fn pick_largest_60(modes: &[KScreenMode]) -> Option<&KScreenMode> {
+    modes
+        .iter()
+        .filter(|mode| {
+            mode.refresh_rate
+                .is_some_and(|hz| hz.is_finite() && hz > 0.0 && hz <= PIP_MAX_HZ as f64)
+        })
+        .max_by(|a, b| {
+            let area =
+                |mode: &KScreenMode| u64::from(mode.size.width) * u64::from(mode.size.height);
+            area(a).cmp(&area(b)).then_with(|| {
+                a.refresh_rate
+                    .partial_cmp(&b.refresh_rate)
+                    .unwrap_or(Ordering::Equal)
+            })
+        })
+}
+
+/// Builds the post-True-Split KScreen command.
+///
+/// The split can make the second external output appear disabled, so it has to
+/// be enabled explicitly; KWin may also switch the built-in panel on, which is
+/// not part of the split and is disabled again. Every external output that is
+/// left enabled gets a 60 Hz mode.
+fn split_setup(root: &KScreenRoot) -> SplitSetup {
+    let mut setup = SplitSetup::default();
+    for output in &root.outputs {
+        if !output.connected {
+            continue;
+        }
+        if !external_output(&output.name) {
+            if output.enabled {
+                setup.args.push(format!("output.{}.disable", output.name));
+            }
+            continue;
+        }
+
+        if !output.enabled {
+            setup.args.push(format!("output.{}.enable", output.name));
+        }
+        let current = output
+            .modes
+            .iter()
+            .find(|mode| mode.id == output.current_mode_id);
+        let target = current
+            .filter(|mode| {
+                mode.refresh_rate
+                    .is_some_and(|hz| hz.is_finite() && hz <= PIP_MAX_HZ as f64)
+            })
+            .or_else(|| pick_60_mode(&output.modes, current))
+            .or_else(|| pick_largest_60(&output.modes));
+        let Some(target) = target else { continue };
+        let hz = target.refresh_rate.unwrap_or(0.0) as f32;
+        let needs_mode = !output.enabled || output.current_mode_id != target.id;
+        if needs_mode {
+            setup
+                .args
+                .push(format!("output.{}.mode.{}", output.name, target.id));
+            setup.applied.push((output.name.clone(), hz));
+        }
+    }
+    setup
+}
+
+/// Enables the two True Split outputs, disables the internal panel if it came
+/// on by itself, and lowers every external output above [`PIP_MAX_HZ`] to its
+/// highest 60 Hz mode.
+///
+/// This is the post-activation path for True Split: the mode write makes the
+/// monitor re-enumerate into two screens, and only then can their refresh rates
+/// be changed. Returns the outputs that were actually switched.
+pub fn set_refresh_60_all() -> Result<Vec<(String, f32)>, String> {
+    if let Some(root) = kscreen() {
+        let setup = split_setup(&root);
+        if setup.args.is_empty() {
+            return Ok(Vec::new());
+        }
+        let out = Command::new("kscreen-doctor")
+            .env("LC_ALL", "C")
+            .args(&setup.args)
+            .output()
+            .map_err(|e| format!("kscreen-doctor: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "kscreen-doctor {}: {}",
+                setup.args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        return Ok(setup.applied);
+    }
+
+    xrandr_set_60_all()
+}
+
+/// XRandR fallback for [`set_refresh_60_all`].
+fn xrandr_set_60_all() -> Result<Vec<(String, f32)>, String> {
+    let out = Command::new("xrandr")
+        .env("LC_ALL", "C")
+        .arg("--query")
+        .output()
+        .map_err(|e| format!("xrandr: {e}"))?;
+    if !out.status.success() {
+        return Err("xrandr --query failed".to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let plan = xrandr_plan_60_all(&text);
+    for (name, mode, rate) in &plan {
+        let out = Command::new("xrandr")
+            .env("LC_ALL", "C")
+            .args([
+                "--output",
+                name,
+                "--mode",
+                mode,
+                "--rate",
+                &format!("{rate:.2}"),
+            ])
+            .output()
+            .map_err(|e| format!("xrandr: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "xrandr {name}: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+    }
+    Ok(plan
+        .into_iter()
+        .map(|(name, _, rate)| (name, rate))
+        .collect())
+}
+
+/// Reads the active outputs from `xrandr --query` and plans a 60 Hz mode for
+/// each one whose current rate is above the limit.
+fn xrandr_plan_60_all(text: &str) -> Vec<(String, String, f32)> {
+    struct Output<'a> {
+        name: &'a str,
+        size: (u32, u32),
+        modes: Vec<(&'a str, f32)>,
+    }
+
+    let mut outputs: Vec<Output<'_>> = Vec::new();
+    for line in text.lines() {
+        if line.starts_with(char::is_whitespace) {
+            let Some(output) = outputs.last_mut() else {
+                continue;
+            };
+            let mut tokens = line.split_whitespace();
+            let Some(mode) = tokens.next() else {
+                continue;
+            };
+            for token in tokens {
+                let rate = token.trim_end_matches(['*', '+']);
+                if let Ok(hz) = rate.parse::<f32>() {
+                    if hz.is_finite() && hz > 0.0 {
+                        output.modes.push((mode, hz));
+                    }
+                }
+            }
+            continue;
+        }
+        if !line.contains(" connected") {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(name) = parts.next() else { continue };
+        if !external_output(name) {
+            continue;
+        }
+        let rest: Vec<&str> = parts.collect();
+        let Some(geometry) = rest.iter().find(|token| is_geometry(token)) else {
+            continue;
+        };
+        let Some(size) = geometry_size(geometry) else {
+            continue;
+        };
+        outputs.push(Output {
+            name,
+            size,
+            modes: Vec::new(),
+        });
+    }
+
+    outputs
+        .into_iter()
+        .filter_map(|output| {
+            let best = output
+                .modes
+                .iter()
+                .filter(|(mode, hz)| {
+                    *hz <= PIP_MAX_HZ + 0.01
+                        && mode_size(mode).is_some_and(|size| size == output.size)
+                })
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))?;
+            Some((output.name.to_string(), best.0.to_string(), best.1))
+        })
+        .collect()
+}
+
+/// Picks the fastest mode no higher than 60 Hz, at the current resolution.
+fn pick_60_mode<'a>(
+    modes: &'a [KScreenMode],
+    current: Option<&KScreenMode>,
+) -> Option<&'a KScreenMode> {
+    let size = current.map(|mode| (mode.size.width, mode.size.height));
+    modes
+        .iter()
+        .filter(|mode| {
+            size.map_or(true, |(width, height)| {
+                mode.size.width == width && mode.size.height == height
+            })
+        })
+        .filter(|mode| {
+            mode.refresh_rate
+                .is_some_and(|hz| hz.is_finite() && hz > 0.0 && hz <= PIP_MAX_HZ as f64)
+        })
+        .max_by(|a, b| {
+            a.refresh_rate
+                .partial_cmp(&b.refresh_rate)
+                .unwrap_or(Ordering::Equal)
+        })
+}
+
+/// XRandR fallback: `xrandr --output DP-2 --mode 5120x1440 --rate 60`.
+fn xrandr_set_60(monitor: &str) -> Result<f32, String> {
+    let out = Command::new("xrandr")
+        .env("LC_ALL", "C")
+        .arg("--query")
+        .output()
+        .map_err(|e| format!("xrandr: {e}"))?;
+    if !out.status.success() {
+        return Err("xrandr --query failed".to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut name: Option<String> = None;
+    let mut best: Option<(String, f32)> = None;
+    for line in text.lines() {
+        if !line.starts_with(char::is_whitespace) {
+            if name.is_some() {
+                break;
+            }
+            if line.contains(" connected") {
+                if let Some(candidate) = line.split_whitespace().next() {
+                    if same_connector(candidate, monitor) {
+                        name = Some(candidate.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        let Some(_) = name else { continue };
+        let mut tokens = line.split_whitespace();
+        let Some(mode) = tokens.next() else {
+            continue;
+        };
+        for token in tokens {
+            let rate = token.trim_end_matches(['*', '+']);
+            let Ok(rate) = rate.parse::<f32>() else {
+                continue;
+            };
+            if rate.is_finite()
+                && rate > 0.0
+                && rate <= PIP_MAX_HZ + 0.01
+                && best.as_ref().is_none_or(|(_, best)| rate > *best)
+            {
+                best = Some((mode.to_string(), rate));
+            }
+        }
+    }
+
+    let name = name.ok_or_else(|| format!("{monitor} is not an active XRandR output"))?;
+    let (mode, rate) = best
+        .ok_or_else(|| "the driver offers no 60 Hz mode at the current resolution".to_string())?;
+    let out = Command::new("xrandr")
+        .env("LC_ALL", "C")
+        .args([
+            "--output",
+            &name,
+            "--mode",
+            &mode,
+            "--rate",
+            &format!("{rate:.2}"),
+        ])
+        .output()
+        .map_err(|e| format!("xrandr: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "xrandr {}: {}",
+            name,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(rate)
 }
 
 /// Scans the desktop for a second independent screen.
@@ -171,7 +577,14 @@ fn from_kscreen(root: KScreenRoot, monitor: &str) -> Option<Displays> {
     let ours = root
         .outputs
         .iter()
-        .find(|output| same_connector(&output.name, monitor))?;
+        .find(|output| same_connector(&output.name, monitor))
+        .or_else(|| {
+            // True Split can rename DP-2 to DP-3. Fall back to the first
+            // active external output so the topology stays known.
+            root.outputs
+                .iter()
+                .find(|output| output.connected && output.enabled && external_output(&output.name))
+        })?;
     let second_screen = root.outputs.iter().any(|output| {
         output.id != ours.id
             && output.connected
@@ -190,11 +603,18 @@ fn from_kscreen(root: KScreenRoot, monitor: &str) -> Option<Displays> {
         .and_then(|mode| mode.refresh_rate)
         .map(|hz| hz as f32)
         .filter(|hz| hz.is_finite() && *hz > 0.0);
+    let external_screens = root
+        .outputs
+        .iter()
+        .filter(|output| output.connected && output.enabled && external_output(&output.name))
+        .count()
+        .min(u8::MAX as usize) as u8;
     Some(Displays {
         known: true,
         second_screen,
         output_size,
         refresh_hz,
+        external_screens,
     })
 }
 
@@ -288,7 +708,12 @@ fn is_geometry(token: &str) -> bool {
 fn from_xrandr(outputs: Vec<XOutput>, monitor: &str) -> Option<Displays> {
     let ours = outputs
         .iter()
-        .find(|output| same_connector(&output.name, monitor))?;
+        .find(|output| same_connector(&output.name, monitor))
+        .or_else(|| {
+            outputs
+                .iter()
+                .find(|output| output.connected && output.enabled && external_output(&output.name))
+        })?;
     let second_screen = outputs.iter().any(|output| {
         output.name != ours.name
             && output.connected
@@ -296,12 +721,24 @@ fn from_xrandr(outputs: Vec<XOutput>, monitor: &str) -> Option<Displays> {
             && output.geometry != ours.geometry
     });
     let output_size = ours.geometry.as_deref().and_then(geometry_size);
+    let external_screens = outputs
+        .iter()
+        .filter(|output| output.connected && output.enabled && external_output(&output.name))
+        .count()
+        .min(u8::MAX as usize) as u8;
     Some(Displays {
         known: true,
         second_screen,
         output_size,
         refresh_hz: ours.refresh_hz,
+        external_screens,
     })
+}
+
+/// `2560x1440` → `(2560, 1440)`.
+fn mode_size(mode: &str) -> Option<(u32, u32)> {
+    let (width, height) = mode.split_once('x')?;
+    Some((width.parse().ok()?, height.parse().ok()?))
 }
 
 /// `2560x1440+0+0` → `(2560, 1440)`.
@@ -425,6 +862,32 @@ HDMI-A-1 connected 2560x1440+0+0 (normal left inverted right x axis y axis) 600m
     }
 
     #[test]
+    fn kscreen_picks_the_fastest_sixty_hertz_mode_at_the_current_size() {
+        let json = r#"{"outputs":[
+            {"id":1,"name":"DP-1","connected":true,"enabled":true,"clones":[],
+             "currentModeId":"1","modes":[
+                {"id":"1","name":"5120x1440@165","refreshRate":165,
+                 "size":{"width":5120,"height":1440}},
+                {"id":"2","name":"5120x1440@120","refreshRate":120,
+                 "size":{"width":5120,"height":1440}},
+                {"id":"3","name":"5120x1440@60","refreshRate":59.98,
+                 "size":{"width":5120,"height":1440}},
+                {"id":"4","name":"5120x1440@50","refreshRate":50,
+                 "size":{"width":5120,"height":1440}},
+                {"id":"5","name":"2560x1080@60","refreshRate":60,
+                 "size":{"width":2560,"height":1080}}]}
+        ]}"#;
+        let root: KScreenRoot = serde_json::from_str(json).unwrap();
+        let output = &root.outputs[0];
+        let current = output
+            .modes
+            .iter()
+            .find(|mode| mode.id == output.current_mode_id);
+        let picked = pick_60_mode(&output.modes, current).unwrap();
+        assert_eq!(picked.id, "3");
+    }
+
+    #[test]
     fn kscreen_flags_a_high_refresh_rate_for_pip() {
         let json = r#"{"outputs":[
             {"id":1,"name":"DP-1","connected":true,"enabled":true,"clones":[],
@@ -453,6 +916,86 @@ HDMI-A-1 disconnected (normal left inverted right x axis y axis)
         let hz = displays.refresh_hz.unwrap();
         assert!((hz - 59.94).abs() < 0.01, "unexpected refresh rate {hz}");
         assert_eq!(displays.refresh_too_high_for_pip(), None);
+    }
+
+    #[test]
+    fn split_setup_enables_the_new_output_and_disables_the_internal_panel() {
+        let json = r#"{"outputs":[
+            {"id":1,"name":"eDP-1","connected":true,"enabled":true,"clones":[],
+             "currentModeId":"83","modes":[
+                {"id":"83","name":"2560x1440@60","refreshRate":60.01,
+                 "size":{"width":2560,"height":1440}}]},
+            {"id":2,"name":"DP-3","connected":true,"enabled":false,"clones":[],
+             "currentModeId":"11","modes":[
+                {"id":"11","name":"2560x1440@120","refreshRate":120,
+                 "size":{"width":2560,"height":1440}},
+                {"id":"12","name":"2560x1440@60","refreshRate":59.95,
+                 "size":{"width":2560,"height":1440}}]}
+        ]}"#;
+        let root: KScreenRoot = serde_json::from_str(json).unwrap();
+        let setup = split_setup(&root);
+        assert!(setup.args.contains(&"output.eDP-1.disable".to_string()));
+        assert!(setup.args.contains(&"output.DP-3.enable".to_string()));
+        assert!(setup.args.contains(&"output.DP-3.mode.12".to_string()));
+        assert_eq!(setup.applied, vec![("DP-3".to_string(), 59.95)]);
+    }
+
+    #[test]
+    fn kscreen_plans_sixty_for_every_active_output_above_the_limit() {
+        let json = r#"{"outputs":[
+            {"id":1,"name":"DP-1","connected":true,"enabled":true,"clones":[],
+             "currentModeId":"6","modes":[
+                {"id":"6","name":"2560x1440@165","refreshRate":165,
+                 "size":{"width":2560,"height":1440}},
+                {"id":"7","name":"2560x1440@60","refreshRate":59.98,
+                 "size":{"width":2560,"height":1440}}]},
+            {"id":2,"name":"DP-2","connected":true,"enabled":true,"clones":[],
+             "currentModeId":"8","modes":[
+                {"id":"8","name":"2560x1440@60","refreshRate":59.98,
+                 "size":{"width":2560,"height":1440}}]},
+            {"id":3,"name":"HDMI-A-1","connected":true,"enabled":false,"clones":[],
+             "currentModeId":"9","modes":[
+                {"id":"9","name":"1920x1080@120","refreshRate":120,
+                 "size":{"width":1920,"height":1080}}]}
+        ]}"#;
+        let root: KScreenRoot = serde_json::from_str(json).unwrap();
+        let plan = plan_60_all(&root);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].name, "DP-1");
+        assert_eq!(plan[0].mode_id, "7");
+        assert!((plan[0].hz - 59.98).abs() < 0.01);
+    }
+
+    #[test]
+    fn xrandr_plans_sixty_for_each_high_refresh_output() {
+        let text = "\
+DP-1 connected 2560x1440+0+0 (normal left inverted right x axis y axis) 600mm x 340mm
+   2560x1440    165.00*+
+   2560x1440     59.98
+DP-2 connected 2560x1440+2560+0 (normal left inverted right x axis y axis) 600mm x 340mm
+   2560x1440    120.00*+
+   2560x1440     59.94
+";
+        let plan = xrandr_plan_60_all(text);
+        assert_eq!(plan.len(), 2);
+        assert_eq!(
+            plan[0],
+            ("DP-1".to_string(), "2560x1440".to_string(), 59.98)
+        );
+        assert_eq!(plan[1].0, "DP-2");
+        assert!((plan[1].2 - 59.94).abs() < 0.01);
+    }
+
+    #[test]
+    #[ignore]
+    fn live_lowers_the_refresh_rate_to_sixty() {
+        let connector =
+            std::env::var("LEGION_LIVE_CONNECTOR").unwrap_or_else(|_| "DP-2".to_string());
+        let hz = set_refresh_60(&connector).expect("set the desktop refresh rate");
+        assert!(
+            hz.is_finite() && hz <= PIP_MAX_HZ + 0.01,
+            "unexpected refresh rate {hz}"
+        );
     }
 
     #[test]

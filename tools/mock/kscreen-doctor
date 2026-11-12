@@ -9,10 +9,44 @@ case "$scenario" in
     single-16:9) width=1920; height=1080 ;;
     single-21:9|pip-21:9) width=3440; height=1440 ;;
     pbp-32:9|pbp-32:9-75) width=2560; height=1440 ;;
+    true-split-32:9|true-split-stale) width=2560; height=1440 ;;
     *) width=5120; height=1440 ;;
 esac
 
-cat <<EOF
+# True Split exposes two external outputs; every other scenario has one.
+case "$scenario" in
+    true-split-32:9|true-split-stale)
+        cat <<EOF
+{
+  "outputs": [
+    {
+      "id": 1,
+      "name": "DP-3",
+      "connected": true,
+      "enabled": true,
+      "clones": [],
+      "currentModeId": "7",
+      "modes": [
+        {"id": "7", "name": "${width}x${height}@60", "refreshRate": 60.0, "size": {"width": $width, "height": $height}}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "DP-4",
+      "connected": true,
+      "enabled": true,
+      "clones": [],
+      "currentModeId": "7",
+      "modes": [
+        {"id": "7", "name": "${width}x${height}@60", "refreshRate": 60.0, "size": {"width": $width, "height": $height}}
+      ]
+    }
+  ]
+}
+EOF
+        ;;
+    *)
+        cat <<EOF
 {
   "outputs": [
     {
@@ -29,3 +63,5 @@ cat <<EOF
   ]
 }
 EOF
+        ;;
+esac

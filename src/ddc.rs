@@ -460,7 +460,9 @@ fn parse_vcp_line(line: &str) -> Option<(u8, VcpValue)> {
 /// so we always call with `--noverify` and read back separately after a pause.
 pub fn set(display: u32, code: u8, value: u16) -> Result<(), String> {
     let mut args = vec!["--display".to_string(), display.to_string()];
-    if code >= 0xE0 {
+    // Vendor-only registers are not in ddcutil's MCCS table. 0xFA is the
+    // Lenovo mutex register and 0xF9 its game-mode selector.
+    if code >= 0xE0 || matches!(code, 0x86 | 0xa4 | 0xf9 | 0xfa) {
         args.push("--permit-unknown-feature".to_string());
     }
     args.push("--noverify".to_string());
@@ -472,6 +474,24 @@ pub fn set(display: u32, code: u8, value: u16) -> Result<(), String> {
         Ok(())
     } else {
         Err(with_reason(&out))
+    }
+}
+
+/// Lenovo's `0xFA` mutex query.
+///
+/// The service writes a token built from the feature it wants to use, waits
+/// 50 ms and reads the register back. `token | 1` (or a plain 1) means another
+/// setting currently owns the feature. A failed write or read is treated as
+/// "not locked": the register is a diagnostic hint, not a write gate we can
+/// rely on when the link is flaky.
+pub fn locked(display: u32, token: u16) -> bool {
+    if set(display, 0xfa, token).is_err() {
+        return false;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    match read(display, &[0xfa]).get(&0xfa).map(|v| v.value) {
+        Some(value) => value == (token | 1) || value == 1,
+        None => false,
     }
 }
 

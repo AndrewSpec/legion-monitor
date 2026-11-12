@@ -11,6 +11,7 @@
 scenario="${LEGION_MOCK_SCENARIO:-single-32:9}"
 connector="${LEGION_MOCK_CONNECTOR:-card1-DP-2}"
 
+# ── scenario state ───────────────────────────────────────────────────────
 case "$scenario" in
     single-16:9)
         model="MOCK-16:9"
@@ -22,6 +23,10 @@ case "$scenario" in
         f4="0000"
         f5="0000"
         f7="0"
+        pip_left=0
+        pip_top=0
+        pip_right=0
+        pip_bottom=0
         ;;
     single-21:9)
         model="Legion R34w-30"
@@ -33,6 +38,10 @@ case "$scenario" in
         f4="0000"
         f5="0000"
         f7="0"
+        pip_left=0
+        pip_top=0
+        pip_right=0
+        pip_bottom=0
         ;;
     single-32:9)
         model="Lenovo Legion R45w-30"
@@ -44,6 +53,10 @@ case "$scenario" in
         f4="0000"
         f5="0000"
         f7="0"
+        pip_left=0
+        pip_top=0
+        pip_right=0
+        pip_bottom=0
         ;;
     pbp-32:9)
         # Left USB-C (0x31), right HDMI 1 (0x11), 50/50 split.
@@ -52,22 +65,30 @@ case "$scenario" in
         contrast=83
         source="1131"
         f0="1131"
-        f2="0103"
-        f4="0100"
+        f2="0000"
+        f4="0200"
         f5="0101"
         f7="0"
+        pip_left=0
+        pip_top=0
+        pip_right=0
+        pip_bottom=0
         ;;
     pbp-32:9-75)
-        # The second layout verified on the R45w-30: 75/25.
+        # The wider layout accepted by the monitor, still exposed as PBP.
         model="Lenovo Legion R45w-30"
         brightness=96
         contrast=83
         source="1131"
         f0="1131"
-        f2="0103"
-        f4="0100"
+        f2="0000"
+        f4="0200"
         f5="0401"
         f7="0"
+        pip_left=0
+        pip_top=0
+        pip_right=0
+        pip_bottom=0
         ;;
     true-split-32:9)
         # Hardware True Split: one USB-C input, two displays in the system.
@@ -75,11 +96,15 @@ case "$scenario" in
         brightness=96
         contrast=83
         source="31"
-        f0="FFFF"
-        f2="0103"
-        f4="0101"
+        f0="3131"
+        f2="0000"
+        f4="0200"
         f5="0101"
         f7="1"
+        pip_left=0
+        pip_top=0
+        pip_right=0
+        pip_bottom=0
         ;;
     true-split-stale)
         # R45w-30 after the OSD enabled True Split 50/50: only the left source
@@ -88,23 +113,46 @@ case "$scenario" in
         brightness=96
         contrast=83
         source="0031"
-        f0="0006"
-        f2="0103"
-        f4="0100"
+        f0="3131"
+        f2="0000"
+        f4="0200"
         f5="0402"
         f7="1"
+        pip_left=0
+        pip_top=0
+        pip_right=0
+        pip_bottom=0
         ;;
     pip-21:9)
-        # Main DisplayPort (0x0F), inset HDMI 2 (0x12).
+        # Main DisplayPort (0x0F), inset HDMI 2 (0x12), top-right quarter.
         model="Legion R34w-30"
         brightness=85
         contrast=68
-        source="0F"
+        source="120F"
         f0="120F"
-        f2="0100"
-        f4="0101"
+        f2="0000"
+        f4="0100"
         f5="0000"
         f7="0"
+        pip_left=1720
+        pip_top=0
+        pip_right=3440
+        pip_bottom=720
+        ;;
+    offline)
+        model=""
+        brightness=0
+        contrast=0
+        source="0000"
+        f0="0000"
+        f2="0000"
+        f4="0000"
+        f5="0000"
+        f7="0"
+        pip_left=0
+        pip_top=0
+        pip_right=0
+        pip_bottom=0
         ;;
     *)
         echo "unknown LEGION_MOCK_SCENARIO: $scenario" >&2
@@ -120,6 +168,14 @@ preset=05
 red=100
 green=100
 blue=98
+# Lenovo vendor picture controls (LADM 2.0.1.1).
+overdrive=2
+dcr=1
+hdr=7
+scaling=2
+game_mode=8
+# F8/F7 feature registers: F8 selects the feature, F7 carries its value.
+f8="15"
 
 case "$1" in
     detect)
@@ -143,6 +199,16 @@ EOF
             cat <<'EOF'
 Feature: 0x10 (Brightness)
 Feature: 0x12 (Contrast)
+Feature: 0x87 (Sharpness)
+Feature: 0x8a (Saturation)
+Feature: 0x8b (Hue)
+Feature: 0x6d (Black Level)
+Feature: 0x72 (Gamma)
+Feature: 0xe0 (Over Drive)
+Feature: 0xea (Dynamic Contrast)
+Feature: 0xef (HDR Mode)
+Feature: 0x86 (Scaling)
+Feature: 0xf9 (Game Mode)
 Feature: 0x0c (Color Temperature)
 Feature: 0x14 (Select Color Preset)
    Values:
@@ -160,14 +226,19 @@ Feature: 0x60 (Input Source)
       11: HDMI 1
       12: HDMI 2
       31: USB-C
+Feature: 0x0b (DisplayPort Select)
+Feature: 0x0d (USB Speed)
+Feature: 0x07 (KVM)
 Feature: 0xf0 (Audio Source)
 Feature: 0xf2 (PIP/PBP)
 Feature: 0xf4 (PIP Size)
 Feature: 0xf5 (PBP Control)
 Feature: 0xf7 (Monitor Features)
 Feature: 0xf8 (Monitor Feature Index)
-Feature: 0x72 (Gamma)
-Feature: 0x87 (Sharpness)
+Feature: 0x95 (PIP Left)
+Feature: 0x96 (PIP Top)
+Feature: 0x97 (PIP Right)
+Feature: 0x98 (PIP Bottom)
 Feature: 0xa5 (Window Select)
 EOF
         else
@@ -177,20 +248,36 @@ EOF
                 case "$code" in
                     10) echo "VCP 10 C $brightness 100" ;;
                     12) echo "VCP 12 C $contrast 100" ;;
+                    87) echo "VCP 87 C $sharpness 4" ;;
+                    8A|8a) echo "VCP 8a C 50 100" ;;
+                    8B|8b) echo "VCP 8b C 50 100" ;;
+                    6D|6d) echo "VCP 6d C 50 100" ;;
+                    72) echo "VCP 72 C $gamma 40960" ;;
+                    E0|e0) echo "VCP e0 C $overdrive 7" ;;
+                    EA|ea) echo "VCP ea C $dcr 1" ;;
+                    EF|ef) echo "VCP ef C $hdr 16" ;;
+                    86) echo "VCP 86 C $scaling 5" ;;
+                    F9|f9) echo "VCP f9 C $game_mode 10" ;;
                     0C|0c) echo "VCP 0c C $color_temp 4" ;;
                     14) echo "VCP 14 SNC $preset" ;;
                     16) echo "VCP 16 C $red 100" ;;
                     18) echo "VCP 18 C $green 100" ;;
                     1A|1a) echo "VCP 1a C $blue 100" ;;
-                    72) echo "VCP 72 C $gamma 40960" ;;
-                    87) echo "VCP 87 C $sharpness 4" ;;
                     60) echo "VCP 60 SNC $source" ;;
+                    0B|0b) echo "VCP 0b C 1 2" ;;
+                    0D|0d) echo "VCP 0d C 1 2" ;;
+                    07) echo "VCP 07 C 1 1" ;;
                     F0|f0) echo "VCP f0 SNC $f0" ;;
                     F2|f2) echo "VCP f2 SNC $f2" ;;
                     F4|f4) echo "VCP f4 SNC $f4" ;;
                     F5|f5) echo "VCP f5 SNC $f5" ;;
                     F7|f7) echo "VCP f7 SNC $f7" ;;
-                    F8|f8) echo "VCP f8 SNC 15" ;;
+                    F8|f8) echo "VCP f8 SNC $f8" ;;
+                    95) echo "VCP 95 C $pip_left 5120" ;;
+                    96) echo "VCP 96 C $pip_top 1440" ;;
+                    97) echo "VCP 97 C $pip_right 5120" ;;
+                    98) echo "VCP 98 C $pip_bottom 1440" ;;
+                    A5|a5) echo "VCP a5 SNC 0" ;;
                 esac
             done
         fi

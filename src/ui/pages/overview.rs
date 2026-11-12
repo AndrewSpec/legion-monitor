@@ -5,12 +5,17 @@ impl App {
         page_header(ui, self.t(Key::NavOverview), self.t(Key::OvDesc));
 
         let mode = self.multi_mode();
+        let mode_label = if self.true_split_active() {
+            Key::ModeTrueSplit
+        } else {
+            mode.key()
+        };
         let bright = self.value(0x10);
         let contrast = self.value(0x12);
 
         card(ui, |ui| {
             ui.horizontal(|ui| {
-                stat(ui, self.t(Key::OvMode), self.t(mode.key()));
+                stat(ui, self.t(Key::OvMode), self.t(mode_label));
                 ui.add_space(30.0);
                 stat(
                     ui,
@@ -75,17 +80,30 @@ impl App {
 
     pub(crate) fn mode_selector(&mut self, ui: &mut Ui) {
         let mode = self.multi_mode();
-        let current = match mode {
-            MultiMode::Off => 0,
-            MultiMode::PictureInPicture => 1,
-            MultiMode::PictureByPicture => 2,
-            MultiMode::Unknown => 3,
+        let true_split = self.true_split_active();
+        // True Split wins over the raw F4 reading: immediately after the
+        // split F4 can still be the pre-split value while the two external
+        // outputs already identify the mode.
+        let current = if true_split {
+            3
+        } else {
+            match mode {
+                MultiMode::Off => 0,
+                MultiMode::PictureInPicture => 1,
+                MultiMode::PictureByPicture => 2,
+                MultiMode::Unknown => 4,
+            }
         };
+        // True Split is a first-class option next to Single/PIP/PBP. It only
+        // exists on a USB-C link, so keep the tile visible but disabled
+        // otherwise. The worker raises the link to 60 Hz after the split.
+        let usbc = matches!(self.current_input(), Some(0x1f | 0x31..=0x3f));
         let pip_blocked = self.pip_refresh_too_high().is_some();
         let items = [
             (self.t(Key::ModeSingle), true),
             (self.t(Key::ModePip), !pip_blocked),
             (self.t(Key::ModePbp), true),
+            (self.t(Key::ModeTrueSplit), usbc || true_split),
         ];
         let selected = ui
             .add_enabled_ui(!self.busy && matches!(self.conn, Conn::Ok(_)), |ui| {
@@ -97,14 +115,13 @@ impl App {
                 0 => {
                     self.win_sources = [0, 0];
                     self.mode_hint = Some(MultiMode::Off);
-                    // Lenovo's SetPIPPBPState closes the split with 0xA5 = 0.
-                    // Without a second screen the monitor must return to the
-                    // input this computer is on; with one, the user can fix a
-                    // wrong input on that screen. The PBP close path also
-                    // clears a hardware True Split left by an older build.
-                    let second = self.displays.has_second_screen();
-                    let source = if second { None } else { self.current_input() };
-                    if !second && source.is_none() {
+                    // Always name our input: closing True Split re-enumerates
+                    // the link, and without 0x60 the monitor can come back on
+                    // its default source instead of this computer. The plan
+                    // clears F8/F7/F5 first so the monitor OSD also leaves
+                    // True Split, not just the PIP/PBP window.
+                    let source = self.current_input();
+                    if source.is_none() {
                         self.toast = Some((
                             self.t(Key::ErrSelfSourceUnknown).to_string(),
                             true,
@@ -133,14 +150,37 @@ impl App {
                         source: self.pbp_entry_source(),
                     });
                 }
+                3 => {
+                    if !true_split {
+                        if !usbc {
+                            self.toast = Some((
+                                self.t(Key::ErrTrueSplitUsbC).to_string(),
+                                true,
+                                Instant::now(),
+                            ));
+                        } else {
+                            // Close PIP/PBP before the split; the worker then
+                            // activates True Split and lowers both screens.
+                            if mode != MultiMode::Off {
+                                let source = self.current_input();
+                                self.send(Cmd::DisableMultiView {
+                                    source,
+                                    pbp: mode == MultiMode::PictureByPicture,
+                                });
+                            }
+                            self.win_sources = [0, 0];
+                            self.mode_hint = Some(MultiMode::PictureByPicture);
+                            self.set_feature(catalog::TRUE_SPLIT_FEATURE, 1);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
-        // On the Multi-view page the PIP card carries the same explanation and
-        // sits next to the disabled corners; repeating it here would duplicate
-        // one sentence on a single screen.
+        // On the Multi-view page the PIP card carries the same explanation;
+        // repeating it here would duplicate one sentence on a single screen.
         if self.section != catalog::Section::MultiView {
-            if let Some(note) = self.pip_blocked_note() {
+            if let Some(note) = self.refresh_note() {
                 ui.add_space(8.0);
                 ui.label(RichText::new(note).size(11.0).color(WARN));
             }

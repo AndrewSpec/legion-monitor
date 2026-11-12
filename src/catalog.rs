@@ -83,6 +83,11 @@ pub fn fn_key(code: u8) -> Option<Key> {
         0x8b => Key::FnHue,
         0x72 => Key::FnGamma,
         0x6d => Key::FnBlackLevel,
+        0xe0 => Key::FnOverdrive,
+        0xea => Key::FnDcr,
+        0xef => Key::FnHdr,
+        0x86 => Key::FnScaling,
+        0xf9 => Key::FnGameMode,
         0x0e | 0x70 => Key::FnClockPhase,
         0x0c => Key::FnColorTemp,
         0x14 => Key::FnColorPreset,
@@ -118,6 +123,11 @@ pub fn hint_key(code: u8) -> Option<Key> {
         0x8b => Key::HintHue,
         0x72 => Key::HintGamma,
         0x6d => Key::HintBlack,
+        0xe0 => Key::HintOverdrive,
+        0xea => Key::HintDcr,
+        0xef => Key::HintHdr,
+        0x86 => Key::HintScaling,
+        0xf9 => Key::HintGameMode,
         0x0e | 0x70 => Key::HintAnalogStab,
         0x0c => Key::HintColorTemp,
         0x14 => Key::HintColorPreset,
@@ -146,6 +156,12 @@ pub const KNOWN: &[Desc] = &[
     d(0x6d, Section::Image, Kind::Continuous),
     d(0x0e, Section::Image, Kind::Continuous),
     d(0x70, Section::Image, Kind::Continuous),
+    // Lenovo vendor picture controls (LADM 2.0.1.1).
+    d(0xe0, Section::Image, Kind::Choice),
+    d(0xea, Section::Image, Kind::Toggle),
+    d(0xef, Section::Image, Kind::Choice),
+    d(0xf9, Section::Image, Kind::Choice),
+    d(0x86, Section::Image, Kind::Choice),
     // Color
     d(0x0c, Section::Color, Kind::Choice),
     d(0x14, Section::Color, Kind::Choice),
@@ -175,7 +191,6 @@ pub const KNOWN: &[Desc] = &[
     d(0x02, Section::Advanced, Kind::ReadOnly),
     d(0x0b, Section::Advanced, Kind::ReadOnly),
     d(0x52, Section::Advanced, Kind::ReadOnly),
-    d(0x86, Section::Advanced, Kind::ReadOnly),
     d(0x95, Section::Advanced, Kind::ReadOnly),
     d(0x96, Section::Advanced, Kind::ReadOnly),
     d(0x97, Section::Advanced, Kind::ReadOnly),
@@ -361,10 +376,132 @@ pub const FEATURE_INDEX: u8 = 0xf8;
 pub const FEATURE_VALUE: u8 = 0xf7;
 /// Feature index 0x15 is the monitor's hardware True Split.
 ///
-/// The app no longer enables it (it forces the link to 120 Hz and can blank
-/// the panel); rescue only writes F7 = 0 to leave it if it was enabled from
-/// the OSD or an older build.
+/// The app enables it from the Multi-view page while USB-C is active. The
+/// monitor re-enumerates the link into two 2560x1440 screens, so the worker
+/// waits and then lowers both to 60 Hz. Rescue and split cleanup write F7 = 0.
 pub const TRUE_SPLIT_FEATURE: u16 = 0x15;
+
+/// Value lists for controls the monitor accepts but ddcutil may not enumerate.
+///
+/// Names come from Lenovo's `VCPCodeDef.json` (version 1.7) and are technical
+/// by nature, so they are not translated.
+pub fn static_choices(code: u8) -> Option<&'static [(u16, &'static str)]> {
+    Some(match code {
+        0xe0 => &[
+            (0x00, "Off"),
+            (0x01, "Normal"),
+            (0x02, "Extreme"),
+            (0x03, "Level 1"),
+            (0x04, "Level 2"),
+            (0x05, "Level 3"),
+            (0x06, "Level 4"),
+            (0x07, "Level 5"),
+        ],
+        0xef => &[
+            (0x00, "Off"),
+            (0x01, "Auto"),
+            (0x02, "HDR1000"),
+            (0x03, "HLG"),
+            (0x04, "Dolby Vision"),
+            (0x05, "HDR"),
+            (0x06, "HDR400"),
+            (0x07, "HDR Game"),
+            (0x08, "HDR Movie"),
+            (0x09, "HDR Photo"),
+            (0x0a, "Dolby Vision Bright"),
+            (0x0b, "Dolby Vision Dark"),
+            (0x0c, "HDR10"),
+            (0x0d, "HDR sRGB"),
+            (0x0e, "HDR Adobe RGB"),
+            (0x0f, "HDR DCI-P3"),
+            (0x10, "TB400"),
+        ],
+        0x86 => &[
+            (0x01, "No scaling"),
+            (0x02, "Full Screen"),
+            (0x05, "Original AR"),
+            (0x0b, "4:3"),
+            (0x0f, "16:9"),
+            (0x10, "16:10"),
+            (0x0c, "5:4"),
+        ],
+        0xf9 => &[
+            (0x00, "Off"),
+            (0x01, "FPS1"),
+            (0x02, "FPS2"),
+            (0x03, "RCG"),
+            (0x04, "RTS"),
+            (0x05, "Game 1"),
+            (0x06, "Game 2"),
+            (0x07, "MOBA"),
+            (0x08, "ACT"),
+            (0x09, "RPG"),
+            (0x0a, "Standard"),
+        ],
+        _ => return None,
+    })
+}
+
+/// A monitor feature selected through F8 and written through F7.
+///
+/// These are not independent VCP codes: the monitor exposes one value register
+/// and the F8 index chooses which setting it belongs to. Lenovo's service
+/// always writes F8 first and F7 second.
+#[derive(Clone, Copy)]
+pub struct FeatureDef {
+    pub index: u16,
+    pub name: Key,
+    pub hint: Key,
+    pub section: Section,
+    /// Value names from `VCPCodeDef.json`; empty when the value is a number.
+    pub options: &'static [(u16, &'static str)],
+}
+
+pub const FEATURES: &[FeatureDef] = &[
+    FeatureDef {
+        index: 0x0b,
+        name: Key::FnDpSelect,
+        hint: Key::HintDpSelect,
+        section: Section::Inputs,
+        options: &[(0, "DP 1.2"), (1, "DP 1.4"), (2, "DP 1.1")],
+    },
+    FeatureDef {
+        index: 0x0d,
+        name: Key::FnUsbSpeed,
+        hint: Key::HintUsbSpeed,
+        section: Section::Inputs,
+        options: &[(0, "USB 2.0"), (1, "USB 3.0"), (2, "USB 3.2")],
+    },
+    FeatureDef {
+        index: 0x07,
+        name: Key::FnKvm,
+        hint: Key::HintKvm,
+        section: Section::Inputs,
+        options: &[(0, "Off"), (1, "On")],
+    },
+    FeatureDef {
+        index: 0x1a,
+        name: Key::FnOverclock,
+        hint: Key::HintOverclock,
+        section: Section::Image,
+        options: &[(0, "Off"), (1, "On")],
+    },
+    FeatureDef {
+        index: TRUE_SPLIT_FEATURE as u16,
+        name: Key::FnTrueSplitState,
+        hint: Key::TrueSplitHint,
+        section: Section::MultiView,
+        options: TRUE_SPLIT_MODES,
+    },
+];
+
+/// True Split modes, in the order Lenovo's service accepts them.
+pub const TRUE_SPLIT_MODES: &[(u16, &str)] =
+    &[(0, "Off"), (1, "1:1"), (3, "3:1"), (2, "1:3"), (4, "1:1:1")];
+
+pub fn features_in(section: Section) -> Vec<&'static FeatureDef> {
+    FEATURES.iter().filter(|f| f.section == section).collect()
+}
 
 /// Corner of the PIP window. The monitor's OSD offers exactly these four.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -490,32 +627,30 @@ impl MultiMode {
     }
 }
 
-/// Decodes the state from the registers that were read.
+/// Decodes the window state from `F4`.
 ///
-/// `F2` is the mode register on the R45w-30. Its current value is zero for one
-/// picture, `0x0100`/`0x0101` for PIP (bit 0 is the swap flag) and `0x0103`
-/// for a two-picture PBP split (bit 1 is set). The monitor uses the same value
-/// for its hardware True Split, which this app does not expose: that mode
-/// changes the link to 2560x1440@120 and can blank the panel. `F4` is not a
-/// mode: it mirrors the selected window and can keep `0x0100` after the split
-/// closes.
-pub fn multi_mode(f2: Option<u16>) -> MultiMode {
-    match f2 {
-        Some(0) => MultiMode::Off,
-        Some(v) if v & 0x0002 != 0 => MultiMode::PictureByPicture,
-        Some(_) => MultiMode::PictureInPicture,
+/// Lenovo's `GetPIPStatus` reads `0xF4` and maps `0x0100`/`0x0101` to PIP and
+/// `0x0200`/`0x0201` to PBP; every other value means one picture. `0xF2` is
+/// *not* the mode: it is the swap command, and it stays `1` in single, PIP and
+/// PBP on the R45w-30. `0xF5` is the layout of a split and is used only as a
+/// fallback when `0xF4` is missing.
+pub fn multi_mode(f4: Option<u16>) -> MultiMode {
+    match f4 {
+        Some(0x0100 | 0x0101) => MultiMode::PictureInPicture,
+        Some(0x0200 | 0x0201) => MultiMode::PictureByPicture,
+        Some(_) => MultiMode::Off,
         None => MultiMode::Unknown,
     }
 }
 
-/// Mode detection that also accepts PBP without its F2 bit.
+/// Mode detection that also accepts PBP when `F4` is unavailable.
 ///
-/// On the R45w-30 PBP can leave F2 at zero while the split is physically
-/// open. In that state F5 still holds the layout and the DisplayPort EDID
-/// shrinks to one half, so the desktop reports a half-width output. Only that
-/// combination is treated as PBP; a stale F5 alone must not invent a split.
-pub fn multi_mode_detected(f2: Option<u16>, f5: Option<u16>, half_width_output: bool) -> MultiMode {
-    let mode = multi_mode(f2);
+/// On the R45w-30 PBP shrinks the DisplayPort EDID to one half, so the desktop
+/// reports a half-width output. Only an active `F5` layout combined with that
+/// half-width output is treated as PBP; a stale `F5` alone must not invent a
+/// split.
+pub fn multi_mode_detected(f4: Option<u16>, f5: Option<u16>, half_width_output: bool) -> MultiMode {
+    let mode = multi_mode(f4);
     if mode == MultiMode::Off && half_width_output && f5.and_then(split_layout_for).is_some() {
         MultiMode::PictureByPicture
     } else {
@@ -571,16 +706,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn multi_mode_reads_the_mode_bits_of_f2() {
+    fn multi_mode_reads_the_status_register_f4() {
         assert_eq!(multi_mode(None), MultiMode::Unknown);
         assert_eq!(multi_mode(Some(0)), MultiMode::Off);
         assert_eq!(multi_mode(Some(0x0100)), MultiMode::PictureInPicture);
         assert_eq!(multi_mode(Some(0x0101)), MultiMode::PictureInPicture);
-        assert_eq!(multi_mode(Some(0x0103)), MultiMode::PictureByPicture);
+        assert_eq!(multi_mode(Some(0x0200)), MultiMode::PictureByPicture);
+        assert_eq!(multi_mode(Some(0x0201)), MultiMode::PictureByPicture);
+        // F2=1 (the swap command) must never be mistaken for a mode.
+        assert_eq!(multi_mode(Some(1)), MultiMode::Off);
     }
 
     #[test]
-    fn pbp_is_detected_without_the_f2_bit() {
+    fn pbp_is_detected_without_f4_when_the_output_is_half_width() {
         assert_eq!(
             multi_mode_detected(Some(0), Some(0x0101), true),
             MultiMode::PictureByPicture
@@ -592,7 +730,7 @@ mod tests {
         );
         assert_eq!(multi_mode_detected(Some(0), Some(0), true), MultiMode::Off);
         assert_eq!(
-            multi_mode_detected(Some(0x0103), Some(0), false),
+            multi_mode_detected(Some(0x0200), Some(0), false),
             MultiMode::PictureByPicture
         );
     }
@@ -640,5 +778,50 @@ mod tests {
             PipCorner::from_fractions([0.5, 0.5, 1.0, 1.0]),
             Some(PipCorner::BottomRight)
         );
+    }
+
+    #[test]
+    fn vendor_choice_tables_match_vcp_code_def() {
+        let overdrive = static_choices(0xe0).unwrap();
+        assert_eq!(overdrive.len(), 8);
+        assert_eq!(overdrive[0], (0, "Off"));
+        assert_eq!(overdrive[7], (7, "Level 5"));
+        let hdr = static_choices(0xef).unwrap();
+        assert!(hdr.contains(&(4, "Dolby Vision")));
+        assert!(hdr.contains(&(0x10, "TB400")));
+        let scaling = static_choices(0x86).unwrap();
+        assert!(scaling.contains(&(0x0b, "4:3")));
+        assert!(scaling.contains(&(0x0f, "16:9")));
+        let game = static_choices(0xf9).unwrap();
+        assert_eq!(game.first(), Some(&(0, "Off")));
+        assert_eq!(game.last(), Some(&(0x0a, "Standard")));
+        assert_eq!(static_choices(0x10), None);
+    }
+
+    #[test]
+    fn true_split_modes_follow_the_vendor_value_order() {
+        let values: Vec<u16> = TRUE_SPLIT_MODES.iter().map(|(v, _)| *v).collect();
+        assert_eq!(values, [0, 1, 3, 2, 4]);
+        assert_eq!(TRUE_SPLIT_MODES[0].1, "Off");
+        assert_eq!(TRUE_SPLIT_MODES[4].1, "1:1:1");
+    }
+
+    #[test]
+    fn every_feature_has_options_and_a_pages() {
+        for feature in FEATURES {
+            assert!(!feature.options.is_empty(), "{}", feature.index);
+            assert!(matches!(
+                feature.section,
+                Section::Image | Section::Inputs | Section::MultiView
+            ));
+            assert!(features_in(feature.section)
+                .iter()
+                .any(|f| f.index == feature.index));
+        }
+        assert!(features_in(Section::Image).iter().any(|f| f.index == 0x1a));
+        assert!(features_in(Section::Inputs).iter().any(|f| f.index == 0x0b));
+        assert!(features_in(Section::MultiView)
+            .iter()
+            .any(|f| f.index == 0x15));
     }
 }

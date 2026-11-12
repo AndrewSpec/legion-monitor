@@ -154,6 +154,34 @@ impl App {
         ui.add_space(6.0);
     }
 
+    /// Like `choice_row`, but the labels come from the vendor catalog and are
+    /// not translated (they are technical names such as `HDR400` or `DP 1.4`).
+    pub(crate) fn choice_row_str(
+        &mut self,
+        ui: &mut Ui,
+        code: u8,
+        label: &str,
+        options: &'static [(u16, &'static str)],
+    ) {
+        let current = self.value(code).unwrap_or(0);
+        ui.label(RichText::new(label).size(13.0).color(TEXT));
+        ui.add_space(6.0);
+        let mut chosen: Option<u16> = None;
+        ui.add_enabled_ui(self.can_edit(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (value, name) in options {
+                    if pill(ui, name, current == *value).clicked() {
+                        chosen = Some(*value);
+                    }
+                }
+            });
+        });
+        if let Some(v) = chosen {
+            self.set_value(code, v);
+        }
+        ui.add_space(6.0);
+    }
+
     /// Like `choice_row`, but takes a list built at run time
     /// (value names come from what the monitor reported).
     pub(crate) fn choice_row_owned(
@@ -182,6 +210,32 @@ impl App {
         ui.add_space(6.0);
     }
 
+    /// One F8/F7 feature with its documented value names.
+    pub(crate) fn feature_row(&mut self, ui: &mut Ui, feature: &catalog::FeatureDef) {
+        let label = self.t(feature.name);
+        let hint = self.t(feature.hint);
+        ui.label(RichText::new(label).size(13.0).color(TEXT));
+        if !hint.is_empty() {
+            ui.label(RichText::new(hint).size(11.0).color(FAINT));
+        }
+        ui.add_space(6.0);
+        let current = self.feature_values.get(&feature.index).copied();
+        let mut chosen: Option<u16> = None;
+        ui.add_enabled_ui(self.can_edit(), |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (value, name) in feature.options {
+                    if pill(ui, name, current == Some(*value)).clicked() {
+                        chosen = Some(*value);
+                    }
+                }
+            });
+        });
+        if let Some(v) = chosen {
+            self.set_feature(feature.index, v);
+        }
+        ui.add_space(6.0);
+    }
+
     /// Picks a convenient control for the feature: value list → buttons,
     /// 0/1 value → toggle, otherwise → slider. Names are always human-readable.
     pub(crate) fn auto_row(&mut self, ui: &mut Ui, code: u8) {
@@ -194,6 +248,12 @@ impl App {
                     self.choice_row_owned(ui, code, &label, &opts);
                     return;
                 }
+            }
+            // ddcutil does not always enumerate vendor choice lists; fall
+            // back to the values Lenovo documents for the code.
+            if let Some(opts) = catalog::static_choices(code) {
+                self.choice_row_str(ui, code, &label, opts);
+                return;
             }
         }
         if kind == Kind::Toggle || self.max(code) <= 1 {
@@ -269,6 +329,7 @@ mod tests {
             rescue_probe: std::time::Instant::now(),
             rescue_after: None,
             rescue_status: None,
+            feature_values: BTreeMap::new(),
         };
         (app, commands)
     }
@@ -341,7 +402,7 @@ mod tests {
 
     #[test]
     fn pbp_single_switch_uses_the_detected_or_chosen_source() {
-        for (second_screen, expected) in [(false, Some(0x31)), (true, None)] {
+        for (second_screen, expected) in [(false, Some(0x31)), (true, Some(0x31))] {
             let (mut app, commands) = app_for_test();
             app.vals.insert(
                 0xf2,
@@ -353,7 +414,7 @@ mod tests {
             app.vals.insert(
                 0xf4,
                 VcpValue {
-                    value: 0x0100,
+                    value: 0x0200,
                     max: 0xffff,
                 },
             );
@@ -369,6 +430,7 @@ mod tests {
                 second_screen,
                 output_size: None,
                 refresh_hz: None,
+                external_screens: 0,
             };
             app.self_source = Some(0x31);
             let ctx = egui::Context::default();
@@ -391,6 +453,7 @@ mod tests {
             second_screen: false,
             output_size: None,
             refresh_hz: None,
+            external_screens: 0,
         };
         app.self_source = Some(0x31);
         // The desktop is on HDMI 1 even though the saved self-source says USB-C.
@@ -403,6 +466,13 @@ mod tests {
         );
         app.vals.insert(
             0xf2,
+            VcpValue {
+                value: 0x0000,
+                max: 0xffff,
+            },
+        );
+        app.vals.insert(
+            0xf4,
             VcpValue {
                 value: 0x0000,
                 max: 0xffff,
@@ -426,22 +496,24 @@ mod tests {
     }
 
     #[test]
-    fn pip_is_refused_above_sixty_hertz() {
+    fn pip_is_allowed_above_sixty_hertz_because_the_worker_lowers_it() {
         let (mut app, commands) = app_for_test();
         app.displays = crate::topology::Displays {
             known: true,
             second_screen: false,
             output_size: None,
             refresh_hz: Some(165.0),
+            external_screens: 0,
         };
         app.self_source = Some(0x31);
         app.enter_pip(catalog::PipCorner::TopRight);
-        assert!(
-            commands.try_recv().is_err(),
-            "a 165 Hz link must not start PIP"
-        );
-        let (note, error, _) = app.toast.clone().expect("the refusal is explained");
-        assert!(error);
+        match commands.try_recv().unwrap() {
+            Cmd::ApplyPip { .. } => {}
+            other => panic!("unexpected command: {:?}", std::mem::discriminant(&other)),
+        }
+        let note = app
+            .refresh_note()
+            .expect("the automatic lowering is explained");
         assert!(note.contains("165"), "unexpected note: {note}");
     }
 
@@ -454,6 +526,7 @@ mod tests {
             output_size: None,
             // Display servers report 59.98 Hz for a 60 Hz mode.
             refresh_hz: Some(59.98),
+            external_screens: 0,
         };
         app.self_source = Some(0x31);
         app.enter_pip(catalog::PipCorner::TopRight);
@@ -483,6 +556,7 @@ mod tests {
                     second_screen: false,
                     output_size: None,
                     refresh_hz: None,
+                    external_screens: 0,
                 };
                 app.self_source = Some(0x31);
                 let ctx = egui::Context::default();
@@ -559,6 +633,66 @@ mod tests {
     }
 
     #[test]
+    fn true_split_is_distinguished_from_pbp_and_is_a_mode_option() {
+        let (mut app, commands) = app_for_test();
+        app.vals.insert(
+            0x60,
+            VcpValue {
+                value: 0x31,
+                max: 0xffff,
+            },
+        );
+        app.vals.insert(
+            0xf4,
+            VcpValue {
+                value: 0x0200,
+                max: 0xffff,
+            },
+        );
+        app.displays = crate::topology::Displays {
+            known: true,
+            second_screen: true,
+            output_size: None,
+            refresh_hz: None,
+            external_screens: 2,
+        };
+        assert!(
+            app.true_split_active(),
+            "two external outputs + F4 PBP is True Split"
+        );
+
+        // PBP with one external output is still PBP, not True Split.
+        app.displays.external_screens = 1;
+        assert!(!app.true_split_active());
+
+        // The fourth mode tile enables True Split through F8/F7.
+        app.vals.insert(
+            0xf4,
+            VcpValue {
+                value: 0,
+                max: 0xffff,
+            },
+        );
+        app.displays = crate::topology::Displays {
+            known: true,
+            second_screen: false,
+            output_size: None,
+            refresh_hz: None,
+            external_screens: 1,
+        };
+        let ctx = egui::Context::default();
+        click_mode_target(&mut app, &ctx, 3);
+        match commands.try_recv().unwrap() {
+            Cmd::SetFeature { index, value } => {
+                assert_eq!(index, crate::catalog::TRUE_SPLIT_FEATURE);
+                assert_eq!(value, 1);
+            }
+            other => panic!("unexpected command: {:?}", std::mem::discriminant(&other)),
+        }
+        assert_eq!(app.multi_mode(), MultiMode::PictureByPicture);
+    }
+
+    #[test]
     fn single_switch_without_second_screen_requires_a_source() {
         let (mut app, commands) = app_for_test();
         app.vals.insert(0xf2, VcpValue { value: 1, max: 1 });
@@ -574,6 +708,7 @@ mod tests {
             second_screen: false,
             output_size: None,
             refresh_hz: None,
+            external_screens: 0,
         };
         app.self_source = None;
 
@@ -627,7 +762,7 @@ mod tests {
         app.vals.insert(
             0xf4,
             VcpValue {
-                value: 0x0100,
+                value: 0x0200,
                 max: 0xffff,
             },
         );
@@ -653,7 +788,7 @@ mod tests {
         for (code, value) in [
             (0x60, 0x0031),
             (0xf2, 0x0103),
-            (0xf4, 0x0100),
+            (0xf4, 0x0200),
             (0xf5, 0x0402),
             (0x95, 2560),
             (0x96, 0),

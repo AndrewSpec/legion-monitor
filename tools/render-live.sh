@@ -4,7 +4,7 @@
 # ddcutil needs /dev/i2c-*, which the DSH sandbox does not expose, so run this
 # through the user manager, for example:
 #
-#   systemd-run --user --wait --pipe -q --setenv=HOME=/home/andrew \
+#   systemd-run --user --wait --pipe -q --setenv=HOME="$HOME" \
 #       --working-directory="$PWD" "$PWD/tools/render-live.sh" [output.png]
 #
 # The X11 backend is forced because the transient unit inherits the Wayland

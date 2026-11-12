@@ -78,6 +78,8 @@ pub struct App {
     rescue_after: Option<Instant>,
     /// Last rescue result, shown on the rescue page.
     rescue_status: Option<(Key, bool)>,
+    /// Values read back from the F8/F7 feature registers, by feature index.
+    feature_values: BTreeMap<u16, u16>,
 }
 
 impl App {
@@ -120,6 +122,7 @@ impl App {
             rescue_probe: Instant::now(),
             rescue_after: None,
             rescue_status: None,
+            feature_values: BTreeMap::new(),
         }
     }
 
@@ -148,10 +151,10 @@ impl App {
         self.displays.refresh_too_high_for_pip()
     }
 
-    /// Warning for the interface when PIP is blocked by the refresh rate.
-    pub(crate) fn pip_blocked_note(&self) -> Option<String> {
+    /// Warning shown when PIP/True Split will have to lower the refresh rate.
+    pub(crate) fn refresh_note(&self) -> Option<String> {
         self.pip_refresh_too_high()
-            .map(|hz| self.tf(Key::PipNeeds60Fmt, format!("{hz:.0}")))
+            .map(|hz| self.tf(Key::RefreshAuto60Fmt, format!("{hz:.0}")))
     }
 
     fn set_value(&mut self, code: u8, value: u16) {
@@ -160,6 +163,18 @@ impl App {
         }
         self.pending.insert(code, value);
         self.send(Cmd::Set { code, value });
+    }
+
+    /// Writes a feature selected through F8/F7 and remembers the requested
+    /// value until the monitor answers with the real one.
+    pub(crate) fn set_feature(&mut self, index: u16, value: u16) {
+        if !self.can_edit() {
+            return;
+        }
+        // Do not stage the value optimistically: the monitor may refuse it on
+        // the 0xFA lock or on an unsupported index, and then the highlight
+        // would claim a change that never happened.
+        self.send(Cmd::SetFeature { index, value });
     }
 
     /// Translation of a key in the selected language.
@@ -268,21 +283,29 @@ impl App {
         self.mode_hint.unwrap_or_else(|| self.derive_multi_mode())
     }
 
+    /// True Split also reports PBP in F4. The distinguishing signal is the
+    /// desktop: True Split exposes two external outputs (DP-3 + DP-4), while
+    /// PBP and single mode expose one.
+    pub(crate) fn true_split_active(&self) -> bool {
+        self.displays.external_screens >= 2
+            && (self.multi_mode() == MultiMode::PictureByPicture
+                || self.feature_values.get(&catalog::TRUE_SPLIT_FEATURE) == Some(&1))
+    }
+
     /// Reads the mode from the registers when the user has not just chosen one.
     ///
-    /// F2 is the nominal mode register on the R45w-30: zero is one picture,
-    /// 0x0100/0x0101 is PIP (bit 0 is the swap flag) and 0x0103 is a split.
-    /// On this unit F2 can keep reporting zero while PBP is physically open,
-    /// so an active F5 layout plus a half-width desktop output also means PBP.
-    /// F4 mirrors the selected window and can stay non-zero after the split
-    /// closes, so it must not be used here.
+    /// F4 is the state register on the R45w-30: `0x0100`/`0x0101` is PIP and
+    /// `0x0200`/`0x0201` is PBP; zero (or anything else) is one picture. F2 is
+    /// the swap command and stays non-zero in every state, so it must not be
+    /// used here. When F4 is unavailable, an active F5 layout plus a
+    /// half-width desktop output also means PBP.
     fn derive_multi_mode(&self) -> MultiMode {
         let (panel_width, _) = self.panel.pixel_size();
         let half_width = self
             .displays
             .output_size
             .is_some_and(|(width, _)| panel_width > 0 && width.saturating_mul(2) <= panel_width);
-        catalog::multi_mode_detected(self.value(0xf2), self.value(0xf5), half_width)
+        catalog::multi_mode_detected(self.value(0xf4), self.value(0xf5), half_width)
     }
 
     fn connector(&self) -> &str {
@@ -560,10 +583,7 @@ impl App {
     pub(crate) fn save_rescue_baseline(&mut self, manual: bool) {
         let result = if !self.connected() {
             Err(Key::RescueNoMonitor)
-        } else if catalog::multi_mode(self.value(0xf2)) != MultiMode::Off {
-            // F4 can read 0 on monitors that do not expose PIP size, so ask
-            // the same decoder the rest of the app uses instead of requiring
-            // the literal 0x0200.
+        } else if catalog::multi_mode(self.value(0xf4)) != MultiMode::Off {
             Err(Key::RescueNeedSingle)
         } else {
             self.value(0x60)
@@ -690,25 +710,16 @@ impl App {
         if !self.can_edit() {
             return;
         }
-        // PIP needs a 60 Hz link: at a higher rate the monitor stretched the
-        // second picture in testing. Refuse here as the single choke point,
-        // not only in the widgets that happen to be visible.
-        if let Some(note) = self.pip_blocked_note() {
-            self.toast = Some((note, true, Instant::now()));
-            return;
-        }
         let main = self.main_source();
-        // Trust the monitor's registers over the cached mode: after a failed or
-        // partial PIP attempt F2 can still report a split while the UI thinks
-        // the page is single, and skipping the close leaves PIP on a
-        // half-written window.
-        //
-        let mode = self.multi_mode();
-        let leave_pbp = match self.value(0xf2) {
-            Some(0) => mode == MultiMode::PictureByPicture,
-            Some(value) => value & 0x0002 != 0,
-            None => matches!(mode, MultiMode::PictureByPicture | MultiMode::Unknown),
-        };
+        // Trust the monitor's F4 status register over the cached mode: after a
+        // failed or partial attempt the UI hint can disagree with the panel.
+        let f4_mode = catalog::multi_mode(self.value(0xf4));
+        let leave_pbp = f4_mode == MultiMode::PictureByPicture
+            || (f4_mode == MultiMode::Unknown
+                && matches!(
+                    self.multi_mode(),
+                    MultiMode::PictureByPicture | MultiMode::Unknown
+                ));
         let (width, height) = self.panel.pixel_size();
         self.pip_corner = corner;
         self.mode_hint = Some(MultiMode::PictureInPicture);
@@ -788,11 +799,6 @@ impl App {
     /// window source independently of the rectangle, so this is the shortest
     /// path from "single" to a visible second picture.
     fn pip_source_picker(&mut self, ui: &mut Ui) {
-        // The card above already explains the block; a disabled picker would
-        // only invite clicks that cannot work.
-        if self.pip_refresh_too_high().is_some() {
-            return;
-        }
         ui.label(RichText::new(self.t(Key::PipSource)).size(13.0).color(TEXT));
         ui.add_space(6.0);
         let sources = self.input_sources();
@@ -926,6 +932,7 @@ impl App {
                         self.self_source = None;
                         self.win_sources = [0, 0];
                         self.displays = Displays::default();
+                        self.feature_values.clear();
                         self.rescue_after = None;
                     }
                     self.conn = c;
@@ -963,6 +970,11 @@ impl App {
                     }
                 }
                 Ev::Busy(b) => self.busy = b,
+                Ev::Feature { index, value } => {
+                    if let Some(value) = value {
+                        self.feature_values.insert(index, value);
+                    }
+                }
                 Ev::Notice(key, argument, err) => {
                     if matches!(
                         key,

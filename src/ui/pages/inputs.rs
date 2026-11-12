@@ -55,6 +55,25 @@ impl App {
                 .color(FAINT),
             );
         });
+
+        let features = catalog::features_in(Section::Inputs);
+        if !features.is_empty() {
+            ui.add_space(16.0);
+            card_titled(ui, self.t(Key::CardExtraFeatures), |ui| {
+                ui.label(
+                    RichText::new(self.t(Key::ExtraFeaturesHint))
+                        .size(11.0)
+                        .color(FAINT),
+                );
+                ui.add_space(10.0);
+                for (i, feature) in features.iter().enumerate() {
+                    if i > 0 {
+                        ui.add_space(6.0);
+                    }
+                    self.feature_row(ui, feature);
+                }
+            });
+        }
     }
 
     // ── page: multi-view ──────────────────────────────────────────────────

@@ -18,6 +18,7 @@ fn split_share(layout: Option<u16>) -> (f32, bool) {
 #[derive(Clone, Copy)]
 struct Scene {
     mode: MultiMode,
+    true_split: bool,
     pair: Option<(u16, u16)>,
     single: Option<u16>,
     self_source: Option<u16>,
@@ -44,6 +45,7 @@ impl App {
         let connected = matches!(self.conn, Conn::Ok(_));
         let scene = Scene {
             mode,
+            true_split: self.true_split_active(),
             pair,
             single,
             self_source: self.self_source.filter(|_| split),
@@ -84,7 +86,7 @@ impl App {
 
             // Only a split can be an approximate reading of F5. PIP's
             // rectangle is known even when the source register is not.
-            if mode == MultiMode::PictureByPicture && !exact {
+            if mode == MultiMode::PictureByPicture && !self.true_split_active() && !exact {
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new(self.t(Key::ScreenApproxSplit))
@@ -221,13 +223,20 @@ impl App {
                 // True Split can expose only the left source in 0x60, so a
                 // missing pair is not a reason to blank the whole drawing:
                 // show the half we do know and leave the other marked unknown.
-                let (left, right) = scene
-                    .pair
-                    .unwrap_or_else(|| (scene.self_source.or(scene.single).unwrap_or(0), 0));
+                let (left, right) = if scene.true_split {
+                    // Both halves carry the same USB-C picture; the monitor
+                    // presents them as two separate sinks to the OS.
+                    let source = scene.single.or(scene.self_source).unwrap_or(0);
+                    (source, source)
+                } else {
+                    scene
+                        .pair
+                        .unwrap_or_else(|| (scene.self_source.or(scene.single).unwrap_or(0), 0))
+                };
                 if left == 0 && right == 0 {
                     self.draw_unknown(&painter, inner, unknown_note);
                 } else {
-                    let gap = 4.0;
+                    let gap = if scene.true_split { 8.0 } else { 4.0 };
                     let divider = inner.left() + inner.width() * scene.share;
                     let left_rect = Rect::from_min_max(
                         inner.min,
@@ -239,7 +248,7 @@ impl App {
                         &painter,
                         left_rect,
                         (left != 0).then_some(left),
-                        scene.self_source == Some(left),
+                        scene.true_split || scene.self_source == Some(left),
                         Some(self.t(Key::WindowLeft)),
                         None,
                     );
@@ -247,7 +256,7 @@ impl App {
                         &painter,
                         right_rect,
                         (right != 0).then_some(right),
-                        scene.self_source == Some(right),
+                        scene.true_split || scene.self_source == Some(right),
                         Some(self.t(Key::WindowRight)),
                         None,
                     );

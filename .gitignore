@@ -11,6 +11,13 @@
 /.tmp-en-config/
 # Local GUI debug captures.
 /gui-*.png
+/gui-*.py
 
 # Packages produced by packaging/package.sh.
 /dist/
+
+# Local scratch workspace (not committed).
+/.research/
+/.tools/
+/ladm-work/
+/.cache/
